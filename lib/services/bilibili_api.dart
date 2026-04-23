@@ -7,6 +7,8 @@
 /// - video_api.dart: 视频列表、搜索
 /// - playback_api.dart: 播放、弹幕、进度
 /// - interaction_api.dart: 点赞、投币、收藏、关注
+/// - player_extras_api.dart: 字幕、章节、播放器附加信息
+/// - content_api.dart: 收藏夹、稍后再看、评论
 library;
 
 // 导出子模块，供外部直接使用
@@ -16,9 +18,14 @@ import 'api/auth_api.dart';
 import 'api/video_api.dart';
 import 'api/playback_api.dart';
 import 'api/interaction_api.dart';
+import 'api/player_extras_api.dart';
+import 'api/content_api.dart';
 import 'api/videoshot_api.dart';
 import 'settings_service.dart' show VideoCodec;
 import '../models/video.dart';
+import '../models/favorite_folder.dart';
+import '../models/player_extras.dart';
+import '../models/video_comment.dart';
 import '../models/videoshot.dart';
 
 /// Bilibili API 服务 (门面模式)
@@ -98,6 +105,13 @@ class BilibiliApi {
   static Future<Map<String, dynamic>?> getVideoInfo(String bvid) =>
       PlaybackApi.getVideoInfo(bvid);
 
+  /// 通过 bvid 获取可直接进入播放器的视频模型
+  static Future<Video?> getVideoByBvid(String bvid) async {
+    final info = await getVideoInfo(bvid);
+    if (info == null) return null;
+    return Video.fromViewInfo(info);
+  }
+
   /// 获取视频的 cid
   static Future<int?> getVideoCid(String bvid) => PlaybackApi.getVideoCid(bvid);
 
@@ -131,6 +145,16 @@ class BilibiliApi {
     required int cid,
   }) => PlaybackApi.getOnlineCount(aid: aid, cid: cid);
 
+  /// 获取播放器附加信息（字幕、章节、弹幕防挡）
+  static Future<VideoPlayerExtras> getPlayerExtras({
+    required String bvid,
+    required int cid,
+  }) => PlayerExtrasApi.getPlayerExtras(bvid: bvid, cid: cid);
+
+  /// 获取字幕内容
+  static Future<List<SubtitleCue>> getSubtitleContent(String url) =>
+      PlayerExtrasApi.getSubtitleContent(url);
+
   /// 获取视频快照(雪碧图)数据
   static Future<VideoshotData?> getVideoshot({
     required String bvid,
@@ -161,9 +185,65 @@ class BilibiliApi {
     required bool favorite,
   }) => InteractionApi.favoriteVideo(aid: aid, favorite: favorite);
 
+  /// 获取收藏夹列表
+  static Future<List<FavoriteFolder>> getFavoriteFolders({int? aid}) =>
+      ContentApi.getFavoriteFolders(aid: aid);
+
+  /// 获取收藏夹内容
+  static Future<List<Video>> getFavoriteFolderVideos({
+    required int mediaId,
+    int page = 1,
+    int pageSize = 20,
+    String order = 'mtime',
+  }) => ContentApi.getFavoriteFolderVideos(
+    mediaId: mediaId,
+    page: page,
+    pageSize: pageSize,
+    order: order,
+  );
+
+  /// 收藏到指定收藏夹
+  static Future<bool> favoriteToFolders({
+    required int aid,
+    required List<int> addMediaIds,
+    List<int> delMediaIds = const [],
+  }) => ContentApi.favoriteToFolders(
+    aid: aid,
+    addMediaIds: addMediaIds,
+    delMediaIds: delMediaIds,
+  );
+
   /// 检查是否已收藏
   static Future<bool> checkFavoriteStatus(int aid) =>
       InteractionApi.checkFavoriteStatus(aid);
+
+  /// 获取稍后再看列表
+  static Future<List<Video>> getWatchLaterVideos() =>
+      ContentApi.getWatchLaterVideos();
+
+  /// 添加到稍后再看
+  static Future<bool> addToWatchLater({int? aid, String? bvid}) =>
+      ContentApi.addToWatchLater(aid: aid, bvid: bvid);
+
+  /// 从稍后再看移除
+  static Future<bool> removeFromWatchLater({int? aid, bool viewed = false}) =>
+      ContentApi.removeFromWatchLater(aid: aid, viewed: viewed);
+
+  /// 清空稍后再看
+  static Future<bool> clearWatchLater() => ContentApi.clearWatchLater();
+
+  /// 获取评论列表
+  static Future<Map<String, dynamic>> getVideoComments({
+    required int aid,
+    int next = 0,
+    int mode = 3,
+  }) => ContentApi.getVideoComments(aid: aid, next: next, mode: mode);
+
+  /// 获取楼中楼回复
+  static Future<List<VideoComment>> getCommentReplies({
+    required int aid,
+    required int rootRpid,
+  }) => ContentApi.getCommentReplies(aid: aid, rootRpid: rootRpid);
 
   /// 关注/取消关注 UP主
   static Future<bool> followUser({required int mid, required bool follow}) =>

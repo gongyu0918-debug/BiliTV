@@ -3,6 +3,7 @@ import 'package:bili_tv_app/plugins/ad_filter_plugin.dart';
 import 'package:bili_tv_app/plugins/danmaku_enhance_plugin.dart';
 import 'package:bili_tv_app/plugins/sponsor_block_plugin.dart';
 import 'auth_service.dart';
+import 'session_watchdog.dart';
 import 'settings_service.dart';
 import 'update_service.dart';
 
@@ -32,5 +33,7 @@ class AppBootstrap {
       UpdateService.init(),
       pluginManager.init(),
     ]);
+
+    SessionWatchdog.start();
   }
 }

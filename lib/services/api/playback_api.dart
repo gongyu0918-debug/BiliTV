@@ -208,7 +208,14 @@ class PlaybackApi {
             // 3. 兜底：确保有视频（可能会用软解）
             selectedVideo ??= candidateVideos.first;
 
-            videoUrl = selectedVideo['baseUrl'] ?? selectedVideo['base_url'];
+            final videoCandidates = BaseApi.normalizeMediaUrls([
+              (selectedVideo['baseUrl'] ?? selectedVideo['base_url'] ?? '')
+                  .toString(),
+              ...((selectedVideo['backupUrl'] ?? selectedVideo['backup_url'])
+                      as List? ??
+                  const []),
+            ]);
+            videoUrl = videoCandidates.isNotEmpty ? videoCandidates.first : '';
             final selectedCodec = selectedVideo['codecs'] as String? ?? '';
 
             if (audios.isNotEmpty) {
@@ -216,12 +223,22 @@ class PlaybackApi {
               sortedAudios.sort(
                 (a, b) => (b['bandwidth'] ?? 0).compareTo(a['bandwidth'] ?? 0),
               );
-              audioUrl =
-                  sortedAudios.first['baseUrl'] ??
-                  sortedAudios.first['base_url'];
+              final audioCandidates = BaseApi.normalizeMediaUrls([
+                (sortedAudios.first['baseUrl'] ??
+                        sortedAudios.first['base_url'] ??
+                        '')
+                    .toString(),
+                ...((sortedAudios.first['backupUrl'] ??
+                            sortedAudios.first['backup_url'])
+                        as List? ??
+                    const []),
+              ]);
+              audioUrl = audioCandidates.isNotEmpty
+                  ? audioCandidates.first
+                  : null;
             }
 
-            if (videoUrl != null) {
+            if (videoUrl.isNotEmpty) {
               return {
                 'url': videoUrl,
                 'audioUrl': audioUrl,
@@ -236,7 +253,12 @@ class PlaybackApi {
         } else if (data['durl'] != null) {
           final durls = data['durl'] as List;
           if (durls.isNotEmpty) {
-            videoUrl = durls[0]['url'];
+            final durlCandidates = BaseApi.normalizeMediaUrls([
+              (durls[0]['url'] ?? '').toString(),
+              ...((durls[0]['backup_url'] ?? durls[0]['backupUrl']) as List? ??
+                  const []),
+            ]);
+            videoUrl = durlCandidates.isNotEmpty ? durlCandidates.first : '';
           }
         }
       }

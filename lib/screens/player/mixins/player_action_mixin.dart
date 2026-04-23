@@ -4,6 +4,8 @@ import 'package:video_player/video_player.dart';
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../models/player_extras.dart';
+import '../../../models/video_comment.dart';
 import '../../../models/video.dart' as models;
 import '../../../services/bilibili_api.dart';
 import '../../../services/settings_service.dart';
@@ -11,6 +13,7 @@ import '../../../services/auth_service.dart';
 import '../../../services/mpd_generator.dart';
 import '../../../services/local_server.dart';
 import '../../../services/api/videoshot_api.dart';
+import '../../../services/tv_home_service.dart';
 import '../widgets/settings_panel.dart';
 import '../player_screen.dart';
 import '../widgets/quality_picker_sheet.dart';
@@ -32,6 +35,10 @@ mixin PlayerActionMixin on PlayerStateMixin {
       danmakuSpeed = prefs.getDouble('danmaku_speed') ?? 10.0;
       hideTopDanmaku = prefs.getBool('hide_top_danmaku') ?? false;
       hideBottomDanmaku = prefs.getBool('hide_bottom_danmaku') ?? false;
+      subtitleEnabled = prefs.getBool('subtitle_enabled') ?? true;
+      subtitleFontSize = prefs.getDouble('subtitle_font_size') ?? 26.0;
+      smartDanmakuProtection =
+          prefs.getBool('smart_danmaku_protection') ?? true;
       // 根据设置决定是否显示控制栏
       showControls = !SettingsService.hideControlsOnStart;
       updateDanmakuOption();
@@ -47,6 +54,9 @@ mixin PlayerActionMixin on PlayerStateMixin {
     await prefs.setDouble('danmaku_speed', danmakuSpeed);
     await prefs.setBool('hide_top_danmaku', hideTopDanmaku);
     await prefs.setBool('hide_bottom_danmaku', hideBottomDanmaku);
+    await prefs.setBool('subtitle_enabled', subtitleEnabled);
+    await prefs.setDouble('subtitle_font_size', subtitleFontSize);
+    await prefs.setBool('smart_danmaku_protection', smartDanmakuProtection);
   }
 
   Map<String, String> _buildVideoHeaders() {
@@ -173,6 +183,7 @@ mixin PlayerActionMixin on PlayerStateMixin {
 
       // 立即启动快照数据预加载 (并行执行)
       loadVideoshot();
+      loadPlayerExtras();
 
       // Initialize focus index based on cid
       if (episodes.isNotEmpty) {
@@ -429,6 +440,188 @@ mixin PlayerActionMixin on PlayerStateMixin {
     }
   }
 
+  Future<void> loadPlayerExtras() async {
+    if (cid == null) return;
+    final requestGeneration = ++playerExtrasRequestGeneration;
+
+    final extras = await BilibiliApi.getPlayerExtras(
+      bvid: widget.video.bvid,
+      cid: cid!,
+    );
+    if (!mounted || requestGeneration != playerExtrasRequestGeneration) return;
+
+    SubtitleTrack? initialTrack = selectedSubtitleTrack;
+    if (initialTrack != null) {
+      final currentTrackId = initialTrack.id;
+      for (final track in extras.subtitles) {
+        if (track.id == currentTrackId) {
+          initialTrack = track;
+          break;
+        }
+      }
+    }
+    initialTrack ??= extras.subtitles.isNotEmpty
+        ? extras.subtitles.first
+        : null;
+
+    setState(() {
+      subtitleTracks = extras.subtitles;
+      chapters = extras.chapters;
+      danmakuMaskUrl = extras.danmakuMaskUrl;
+      selectedSubtitleTrack = initialTrack;
+      focusedChapterIndex = _resolveCurrentChapterIndex(
+        currentPosition: videoController?.value.position,
+      );
+      if (chapters.isEmpty) {
+        showChapterPanel = false;
+      }
+      updateDanmakuOption();
+    });
+
+    if (subtitleEnabled && initialTrack != null) {
+      await loadSubtitleTrack(initialTrack);
+    } else if (mounted && requestGeneration == playerExtrasRequestGeneration) {
+      setState(() {
+        subtitleCues = [];
+        currentSubtitleText = '';
+        lastSubtitleIndex = 0;
+      });
+    }
+  }
+
+  int _resolveCurrentChapterIndex({Duration? currentPosition}) {
+    if (chapters.isEmpty) {
+      return 0;
+    }
+
+    final position = currentPosition ?? videoController?.value.position;
+    if (position != null) {
+      final currentIndex = chapters.indexWhere(
+        (chapter) => position >= chapter.from && position < chapter.to,
+      );
+      if (currentIndex >= 0) {
+        return currentIndex;
+      }
+    }
+
+    return focusedChapterIndex.clamp(0, chapters.length - 1);
+  }
+
+  void openChapterPanel() {
+    if (chapters.isEmpty) {
+      Fluttertoast.showToast(msg: '当前视频没有章节');
+      return;
+    }
+
+    final targetIndex = _resolveCurrentChapterIndex(
+      currentPosition: videoController?.value.position,
+    );
+    debugPrint(
+      'Player: openChapterPanel chapters=${chapters.length} focus=$targetIndex',
+    );
+    setState(() {
+      focusedChapterIndex = targetIndex;
+      showChapterPanel = true;
+      showControls = true;
+      hideTimer?.cancel();
+    });
+  }
+
+  Future<void> loadSubtitleTrack(SubtitleTrack? track) async {
+    final requestGeneration = ++subtitleRequestGeneration;
+    if (track == null) {
+      if (!mounted || requestGeneration != subtitleRequestGeneration) return;
+      setState(() {
+        selectedSubtitleTrack = null;
+        subtitleCues = [];
+        currentSubtitleText = '';
+        lastSubtitleIndex = 0;
+      });
+      return;
+    }
+
+    final cues = await BilibiliApi.getSubtitleContent(track.url);
+    if (!mounted || requestGeneration != subtitleRequestGeneration) return;
+    setState(() {
+      selectedSubtitleTrack = track;
+      subtitleCues = cues;
+      currentSubtitleText = '';
+      lastSubtitleIndex = 0;
+    });
+  }
+
+  void _updateCurrentSubtitle(Duration position) {
+    if (!subtitleEnabled ||
+        selectedSubtitleTrack == null ||
+        subtitleCues.isEmpty) {
+      if (currentSubtitleText.isNotEmpty) {
+        setState(() => currentSubtitleText = '');
+      }
+      return;
+    }
+
+    final currentMs = position.inMilliseconds;
+    String text = '';
+    int candidateIndex = lastSubtitleIndex.clamp(0, subtitleCues.length - 1);
+
+    if (subtitleCues[candidateIndex].to.inMilliseconds < currentMs) {
+      while (candidateIndex + 1 < subtitleCues.length &&
+          subtitleCues[candidateIndex].to.inMilliseconds < currentMs) {
+        candidateIndex++;
+      }
+    } else {
+      while (candidateIndex > 0 &&
+          subtitleCues[candidateIndex].from.inMilliseconds > currentMs) {
+        candidateIndex--;
+      }
+    }
+
+    final cue = subtitleCues[candidateIndex];
+    if (currentMs >= cue.from.inMilliseconds &&
+        currentMs <= cue.to.inMilliseconds) {
+      text = cue.content;
+      lastSubtitleIndex = candidateIndex;
+    }
+
+    if (text != currentSubtitleText && mounted) {
+      setState(() => currentSubtitleText = text);
+    }
+  }
+
+  Future<void> loadComments({bool reset = false}) async {
+    if (aid == null || (commentsLoading && !reset)) return;
+
+    if (reset) {
+      setState(() {
+        commentsLoading = true;
+        commentsHasMore = true;
+        commentNext = 0;
+        comments = [];
+      });
+    } else {
+      setState(() => commentsLoading = true);
+    }
+
+    final result = await BilibiliApi.getVideoComments(
+      aid: aid!,
+      next: reset ? 0 : commentNext,
+    );
+    if (!mounted) return;
+
+    final fetched = result['list'] as List<VideoComment>? ?? const [];
+    setState(() {
+      if (reset) {
+        comments = fetched;
+        focusedCommentIndex = 0;
+      } else {
+        comments = [...comments, ...fetched];
+      }
+      commentNext = result['next'] as int? ?? 0;
+      commentsHasMore = result['hasMore'] as bool? ?? false;
+      commentsLoading = false;
+    });
+  }
+
   /// 设置播放器监听器
   void _setupPlayerListeners() {
     if (videoController == null) return;
@@ -445,6 +638,7 @@ mixin PlayerActionMixin on PlayerStateMixin {
     if (danmakuEnabled && danmakuController != null) {
       syncDanmaku(value.position.inSeconds.toDouble());
     }
+    _updateCurrentSubtitle(value.position);
 
     // 检查是否需要预加载下一张雪碧图
     _checkSpritePreload(value.position);
@@ -676,14 +870,31 @@ mixin PlayerActionMixin on PlayerStateMixin {
       return;
     }
 
+    final duration = videoController!.value.duration;
     final progress =
         overrideProgress ?? videoController!.value.position.inSeconds;
+    debugPrint(
+      'Player: reportPlaybackProgress bvid=${widget.video.bvid} progress=$progress duration=${duration.inSeconds}',
+    );
 
     // 上报到B站
     await BilibiliApi.reportProgress(
       bvid: widget.video.bvid,
       cid: cid!,
       progress: progress,
+    );
+
+    if (progress < 0) {
+      debugPrint('Player: clearWatchNext ${widget.video.bvid}');
+      await TvHomeService.clearWatchNext(widget.video.bvid);
+      return;
+    }
+
+    debugPrint('Player: publishWatchNext ${widget.video.bvid}');
+    await TvHomeService.publishWatchNext(
+      video: getDisplayVideo(),
+      position: Duration(seconds: progress),
+      duration: duration,
     );
   }
 
@@ -1083,15 +1294,20 @@ mixin PlayerActionMixin on PlayerStateMixin {
   }
 
   void updateDanmakuOption() {
+    final shouldProtectBottom =
+        smartDanmakuProtection && (subtitleEnabled || danmakuMaskUrl != null);
+    final protectedArea = shouldProtectBottom && danmakuArea > 0.75
+        ? 0.75
+        : danmakuArea;
     danmakuController?.updateOption(
       DanmakuOption(
         opacity: danmakuOpacity,
         fontSize: danmakuFontSize,
         // 弹幕飞行速度随播放倍速同步调整
         duration: danmakuSpeed / playbackSpeed,
-        area: danmakuArea,
+        area: protectedArea,
         hideTop: hideTopDanmaku,
-        hideBottom: hideBottomDanmaku,
+        hideBottom: hideBottomDanmaku || shouldProtectBottom,
       ),
     );
   }
@@ -1127,6 +1343,9 @@ mixin PlayerActionMixin on PlayerStateMixin {
         case 6:
           hideBottomDanmaku = !hideBottomDanmaku;
           break;
+        case 7:
+          smartDanmakuProtection = !smartDanmakuProtection;
+          break;
       }
       updateDanmakuOption();
       saveSettings();
@@ -1137,6 +1356,8 @@ mixin PlayerActionMixin on PlayerStateMixin {
     if (newCid == cid) return;
 
     setState(() {
+      playerExtrasRequestGeneration++;
+      subtitleRequestGeneration++;
       cid = newCid;
       isLoading = true;
       errorMessage = null;
@@ -1144,7 +1365,16 @@ mixin PlayerActionMixin on PlayerStateMixin {
       lastDanmakuIndex = 0;
       danmakuList = [];
       hasHandledVideoComplete = false; // 重置播放完成标志，确保下一集播完后能继续触发自动播放
+      subtitleTracks = [];
+      selectedSubtitleTrack = null;
+      subtitleCues = [];
+      currentSubtitleText = '';
+      lastSubtitleIndex = 0;
+      chapters = [];
+      danmakuMaskUrl = null;
     });
+
+    await TvHomeService.clearWatchNext(widget.video.bvid);
 
     // 清理旧播放器
     cancelPlayerListeners();
@@ -1186,6 +1416,7 @@ mixin PlayerActionMixin on PlayerStateMixin {
         // 🔥 重新加载当前 P 的雪碧图数据
         _clearSpritesFromMemory();
         loadVideoshot();
+        loadPlayerExtras();
 
         final idx = episodes.indexWhere((e) => e['cid'] == cid);
         if (idx != -1) setState(() => focusedEpisodeIndex = idx);
@@ -1213,21 +1444,62 @@ mixin PlayerActionMixin on PlayerStateMixin {
           break;
         case 1:
           setState(() {
-            settingsMenuType = SettingsMenuType.danmaku;
+            settingsMenuType = SettingsMenuType.subtitle;
             focusedSettingIndex = 0;
           });
           break;
         case 2:
+          setState(() {
+            settingsMenuType = SettingsMenuType.danmaku;
+            focusedSettingIndex = 0;
+          });
+          break;
+        case 3:
           setState(() {
             settingsMenuType = SettingsMenuType.speed;
             focusedSettingIndex = 0;
           });
           break;
       }
+    } else if (settingsMenuType == SettingsMenuType.subtitle) {
+      switch (focusedSettingIndex) {
+        case 0:
+          final nextEnabled = !subtitleEnabled;
+          setState(() {
+            subtitleEnabled = nextEnabled;
+            if (!nextEnabled) {
+              currentSubtitleText = '';
+            }
+          });
+          saveSettings();
+          updateDanmakuOption();
+          if (nextEnabled && selectedSubtitleTrack != null) {
+            loadSubtitleTrack(selectedSubtitleTrack);
+          }
+          break;
+        case 1:
+          if (subtitleTracks.isNotEmpty) {
+            final currentIndex = subtitleTracks.indexWhere(
+              (track) => track.id == selectedSubtitleTrack?.id,
+            );
+            final nextIndex = currentIndex < 0
+                ? 0
+                : (currentIndex + 1) % subtitleTracks.length;
+            loadSubtitleTrack(subtitleTracks[nextIndex]);
+          }
+          break;
+        case 2:
+          setState(() {
+            subtitleFontSize = (subtitleFontSize + 2).clamp(18.0, 40.0);
+          });
+          saveSettings();
+          break;
+      }
     } else if (settingsMenuType == SettingsMenuType.danmaku) {
       if (focusedSettingIndex == 0 ||
           focusedSettingIndex == 5 ||
-          focusedSettingIndex == 6) {
+          focusedSettingIndex == 6 ||
+          focusedSettingIndex == 7) {
         adjustDanmakuSetting(1);
       }
     } else if (settingsMenuType == SettingsMenuType.speed) {

@@ -4,6 +4,8 @@ import 'package:video_player/video_player.dart';
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import '../player_screen.dart';
 import '../widgets/settings_panel.dart';
+import '../../../models/player_extras.dart';
+import '../../../models/video_comment.dart';
 import '../../../models/videoshot.dart';
 
 /// 播放器状态 Mixin
@@ -43,10 +45,14 @@ mixin PlayerStateMixin on State<PlayerScreen> {
   double danmakuSpeed = 10.0;
   bool hideTopDanmaku = false;
   bool hideBottomDanmaku = false;
+  bool smartDanmakuProtection = true;
+  String? danmakuMaskUrl;
 
   // 播放设置
   double playbackSpeed = 1.0;
   final List<double> availableSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+  bool subtitleEnabled = true;
+  double subtitleFontSize = 26.0;
 
   // UI 控制
   bool showControls = true;
@@ -73,11 +79,27 @@ mixin PlayerStateMixin on State<PlayerScreen> {
   // 弹幕数据
   List<dynamic> danmakuList = [];
   int lastDanmakuIndex = 0;
+  List<SubtitleTrack> subtitleTracks = [];
+  List<SubtitleCue> subtitleCues = [];
+  SubtitleTrack? selectedSubtitleTrack;
+  String currentSubtitleText = '';
+  int lastSubtitleIndex = 0;
+  int playerExtrasRequestGeneration = 0;
+  int subtitleRequestGeneration = 0;
+  List<VideoChapter> chapters = [];
 
   // 新面板
   bool showUpPanel = false;
   bool showRelatedPanel = false;
   bool showActionButtons = false;
+  bool showChapterPanel = false;
+  bool showCommentPanel = false;
+  int focusedChapterIndex = 0;
+  List<VideoComment> comments = [];
+  bool commentsLoading = false;
+  bool commentsHasMore = true;
+  int commentNext = 0;
+  int focusedCommentIndex = 0;
 
   // 进度条聚焦模式
   bool isProgressBarFocused = false;
@@ -132,5 +154,21 @@ mixin PlayerStateMixin on State<PlayerScreen> {
       return '$desc ($_codecLabel)';
     }
     return desc;
+  }
+
+  VideoChapter? get currentChapter {
+    if (chapters.isEmpty ||
+        videoController == null ||
+        !videoController!.value.isInitialized) {
+      return null;
+    }
+
+    final position = videoController!.value.position;
+    for (final chapter in chapters) {
+      if (position >= chapter.from && position < chapter.to) {
+        return chapter;
+      }
+    }
+    return null;
   }
 }

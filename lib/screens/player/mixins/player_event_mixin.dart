@@ -61,6 +61,24 @@ mixin PlayerEventMixin on PlayerActionMixin {
       return;
     }
 
+    if (showChapterPanel) {
+      setState(() {
+        showChapterPanel = false;
+        showControls = true;
+      });
+      startHideTimer();
+      return;
+    }
+
+    if (showCommentPanel) {
+      setState(() {
+        showCommentPanel = false;
+        showControls = true;
+      });
+      startHideTimer();
+      return;
+    }
+
     if (showActionButtons) {
       setState(() => showActionButtons = false);
       startHideTimer();
@@ -180,6 +198,32 @@ mixin PlayerEventMixin on PlayerActionMixin {
       return KeyEventResult.ignored;
     }
 
+    if (showChapterPanel) {
+      if (PlayerFocusHandler.isBackKey(event) && event is KeyDownEvent) {
+        backKeyJustHandled = true;
+        setState(() {
+          showChapterPanel = false;
+          showControls = true;
+        });
+        startHideTimer();
+        return KeyEventResult.handled;
+      }
+      return _handleChapterPanelKeyEvent(event);
+    }
+
+    if (showCommentPanel) {
+      if (PlayerFocusHandler.isBackKey(event) && event is KeyDownEvent) {
+        backKeyJustHandled = true;
+        setState(() {
+          showCommentPanel = false;
+          showControls = true;
+        });
+        startHideTimer();
+        return KeyEventResult.handled;
+      }
+      return _handleCommentPanelKeyEvent(event);
+    }
+
     // 点赞/投币/收藏按钮返回处理
     if (showActionButtons) {
       if (PlayerFocusHandler.isBackKey(event) && event is KeyDownEvent) {
@@ -208,7 +252,7 @@ mixin PlayerEventMixin on PlayerActionMixin {
     final nav = PlayerFocusHandler.handleControlsNavigation(
       event,
       currentIndex: focusedButtonIndex,
-      maxIndex: 4,
+      maxIndex: 6,
       onSelect: _activateControlButton,
       onHide: () => setState(() => showControls = false),
     );
@@ -242,25 +286,37 @@ mixin PlayerEventMixin on PlayerActionMixin {
           hideTimer?.cancel();
         });
         break;
-      case 1: // UP主
+      case 1: // 章节
+        openChapterPanel();
+        break;
+      case 2: // UP主
         setState(() {
           showUpPanel = true;
           hideTimer?.cancel();
         });
         break;
-      case 2: // 更多视频
+      case 3: // 更多视频
         setState(() {
           showRelatedPanel = true;
           hideTimer?.cancel();
         });
         break;
-      case 3: // 设置
+      case 4: // 评论
+        setState(() {
+          showCommentPanel = true;
+          hideTimer?.cancel();
+        });
+        if (comments.isEmpty && !commentsLoading) {
+          loadComments(reset: true);
+        }
+        break;
+      case 5: // 设置
         setState(() {
           showSettingsPanel = true;
           hideTimer?.cancel();
         });
         break;
-      case 4: // 点赞/投币/收藏
+      case 6: // 点赞/投币/收藏
         setState(() {
           showActionButtons = !showActionButtons;
         });
@@ -385,6 +441,8 @@ mixin PlayerEventMixin on PlayerActionMixin {
           showControls = true;
         });
         startHideTimer();
+      } else if (settingsMenuType == SettingsMenuType.subtitle) {
+        setState(() => settingsMenuType = SettingsMenuType.main);
       } else if (settingsMenuType == SettingsMenuType.danmaku) {
         adjustDanmakuSetting(-1);
       } else if (settingsMenuType == SettingsMenuType.speed) {
@@ -397,15 +455,22 @@ mixin PlayerEventMixin on PlayerActionMixin {
       if (settingsMenuType == SettingsMenuType.main) {
         if (focusedSettingIndex == 1) {
           setState(() {
-            settingsMenuType = SettingsMenuType.danmaku;
+            settingsMenuType = SettingsMenuType.subtitle;
             focusedSettingIndex = 0;
           });
         } else if (focusedSettingIndex == 2) {
+          setState(() {
+            settingsMenuType = SettingsMenuType.danmaku;
+            focusedSettingIndex = 0;
+          });
+        } else if (focusedSettingIndex == 3) {
           setState(() {
             settingsMenuType = SettingsMenuType.speed;
             focusedSettingIndex = 0;
           });
         }
+      } else if (settingsMenuType == SettingsMenuType.subtitle) {
+        activateSetting();
       } else if (settingsMenuType == SettingsMenuType.danmaku) {
         adjustDanmakuSetting(1);
       }
@@ -440,13 +505,106 @@ mixin PlayerEventMixin on PlayerActionMixin {
   int _getSettingsMaxIndex() {
     switch (settingsMenuType) {
       case SettingsMenuType.main:
+        return 3;
+      case SettingsMenuType.subtitle:
         return 2;
       case SettingsMenuType.danmaku:
-        return 6;
+        return 7;
       case SettingsMenuType.speed:
         return availableSpeeds.length - 1;
       default:
         return 0;
     }
+  }
+
+  KeyEventResult _handleChapterPanelKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (chapters.isEmpty) return KeyEventResult.handled;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(
+        () => focusedChapterIndex = (focusedChapterIndex - 1).clamp(
+          0,
+          chapters.length - 1,
+        ),
+      );
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(
+        () => focusedChapterIndex = (focusedChapterIndex + 1).clamp(
+          0,
+          chapters.length - 1,
+        ),
+      );
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      setState(() {
+        showChapterPanel = false;
+        showControls = true;
+      });
+      startHideTimer();
+      return KeyEventResult.handled;
+    }
+    if (PlayerFocusHandler.isSelectKey(event)) {
+      final chapter =
+          chapters[focusedChapterIndex.clamp(0, chapters.length - 1)];
+      debugPrint(
+        'Player: selectChapter index=$focusedChapterIndex from=${chapter.from.inSeconds}',
+      );
+      videoController?.seekTo(chapter.from);
+      resetDanmakuIndex(chapter.from);
+      setState(() {
+        showChapterPanel = false;
+        showControls = true;
+      });
+      startHideTimer();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  KeyEventResult _handleCommentPanelKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (comments.isEmpty) {
+      if (!commentsLoading && commentsHasMore) {
+        loadComments(reset: true);
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(
+        () => focusedCommentIndex = (focusedCommentIndex - 1).clamp(
+          0,
+          comments.length - 1,
+        ),
+      );
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      final nextIndex = (focusedCommentIndex + 1).clamp(0, comments.length - 1);
+      setState(() => focusedCommentIndex = nextIndex);
+      if (nextIndex >= comments.length - 3 &&
+          commentsHasMore &&
+          !commentsLoading) {
+        loadComments();
+      }
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      setState(() {
+        showCommentPanel = false;
+        showControls = true;
+      });
+      startHideTimer();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.handled;
   }
 }

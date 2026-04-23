@@ -139,6 +139,25 @@ class Video {
     );
   }
 
+  /// 从视频详情接口解析
+  factory Video.fromViewInfo(Map<String, dynamic> json) {
+    final owner = json['owner'] as Map<String, dynamic>? ?? const {};
+    final stat = json['stat'] as Map<String, dynamic>? ?? const {};
+    return Video(
+      bvid: json['bvid'] ?? '',
+      title: json['title'] ?? '',
+      pic: _fixPicUrl(json['pic'] ?? ''),
+      ownerName: owner['name'] ?? '',
+      ownerFace: _fixPicUrl(owner['face'] ?? ''),
+      ownerMid: _toInt(owner['mid']),
+      view: _toInt(stat['view']),
+      danmaku: _toInt(stat['danmaku']),
+      duration: _toInt(json['duration']),
+      pubdate: _toInt(json['pubdate']),
+      badge: json['badge'] ?? '',
+    );
+  }
+
   /// 格式化播放量
   String get viewFormatted {
     if (view >= 100000000) return '${(view / 100000000).toStringAsFixed(1)}亿';

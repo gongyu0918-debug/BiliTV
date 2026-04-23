@@ -6,9 +6,18 @@ import '../auth_service.dart';
 
 /// 认证相关 API
 class AuthApi {
-  /// 获取用户信息 (头像、昵称等)
-  static Future<void> fetchAndSaveUserInfo() async {
-    if (!AuthService.isLoggedIn) return;
+  /// 获取当前登录态快照
+  static Future<Map<String, dynamic>> getSessionStatus({
+    bool refreshUserInfo = false,
+  }) async {
+    final result = <String, dynamic>{
+      'checkedAt': DateTime.now().toIso8601String(),
+      'valid': false,
+      'code': null,
+      'message': '',
+      'isLoggedIn': AuthService.isLoggedIn,
+      'data': const <String, dynamic>{},
+    };
 
     try {
       final response = await http.get(
@@ -16,28 +25,50 @@ class AuthApi {
         headers: BaseApi.getHeaders(withCookie: true),
       );
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['code'] == 0 && json['data'] != null) {
-          final data = json['data'];
-          final face = data['face'] as String? ?? '';
-          final uname = data['uname'] as String? ?? '';
+      result['httpStatus'] = response.statusCode;
+      if (response.statusCode != 200) {
+        result['message'] = 'HTTP ${response.statusCode}';
+        return result;
+      }
 
-          // 解析 VIP 状态
-          // vipStatus: 0=无, 1=大会员
-          // vipType: 0=无, 1=月度, 2=年度及以上
-          final vipData = data['vip'];
-          final isVip = (vipData != null && (vipData['status'] == 1));
+      final json = jsonDecode(utf8.decode(response.bodyBytes));
+      final data = json['data'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(json['data'])
+          : <String, dynamic>{};
+      final code = json['code'];
+      final valid = code == 0;
 
-          if (face.isNotEmpty) {
-            await AuthService.saveUserInfo(
-              face: face,
-              uname: uname,
-              isVip: isVip,
-            );
-          }
+      result['valid'] = valid;
+      result['code'] = code;
+      result['message'] = json['message'] ?? '';
+      result['data'] = data;
+
+      if (valid && refreshUserInfo) {
+        final face = data['face'] as String? ?? '';
+        final uname = data['uname'] as String? ?? '';
+        final vipData = data['vip'];
+        final isVip = vipData != null && vipData['status'] == 1;
+        if (face.isNotEmpty || uname.isNotEmpty) {
+          await AuthService.saveUserInfo(
+            face: face,
+            uname: uname,
+            isVip: isVip,
+          );
         }
       }
+    } catch (e) {
+      result['message'] = e.toString();
+    }
+
+    return result;
+  }
+
+  /// 获取用户信息 (头像、昵称等)
+  static Future<void> fetchAndSaveUserInfo() async {
+    if (!AuthService.isLoggedIn) return;
+
+    try {
+      await getSessionStatus(refreshUserInfo: true);
     } catch (e) {
       // 忽略错误
     }

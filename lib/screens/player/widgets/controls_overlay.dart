@@ -13,9 +13,13 @@ class ControlsOverlay extends StatelessWidget {
   final VoidCallback onPlayPause;
   final VoidCallback onSettings;
   final VoidCallback onEpisodes;
+  final VoidCallback onChapters;
+  final VoidCallback onComments;
   final bool isDanmakuEnabled;
   final VoidCallback onToggleDanmaku;
   final String currentQuality;
+  final String subtitleLabel;
+  final String? currentChapterLabel;
   final VoidCallback onQualityClick;
   final bool isProgressBarFocused; // 进度条是否获得焦点
   final Duration? previewPosition; // 预览位置（快进快退时）
@@ -31,9 +35,13 @@ class ControlsOverlay extends StatelessWidget {
     required this.onPlayPause,
     required this.onSettings,
     required this.onEpisodes,
+    required this.onChapters,
+    required this.onComments,
     required this.isDanmakuEnabled,
     required this.onToggleDanmaku,
     required this.currentQuality,
+    required this.subtitleLabel,
+    this.currentChapterLabel,
     required this.onQualityClick,
     this.isProgressBarFocused = false,
     this.previewPosition,
@@ -198,31 +206,43 @@ class ControlsOverlay extends StatelessWidget {
                       icon: Icons.playlist_play,
                       onTap: onEpisodes,
                     ),
-                    const SizedBox(width: 24),
-                    // UP主 (原 index 2 → 现 index 1)
+                    const SizedBox(width: 18),
                     _buildControlButton(
                       index: 1,
+                      icon: Icons.bookmarks_outlined,
+                      onTap: onChapters,
+                    ),
+                    const SizedBox(width: 18),
+                    // UP主 (原 index 2 → 现 index 1)
+                    _buildControlButton(
+                      index: 2,
                       icon: Icons.person,
                       onTap: () {},
                     ),
-                    const SizedBox(width: 24),
+                    const SizedBox(width: 18),
                     // 更多视频 (原 index 3 → 现 index 2)
                     _buildControlButton(
-                      index: 2,
+                      index: 3,
                       icon: Icons.expand_more,
                       onTap: () {},
                     ),
-                    const SizedBox(width: 24),
+                    const SizedBox(width: 18),
+                    _buildControlButton(
+                      index: 4,
+                      icon: Icons.comment_outlined,
+                      onTap: onComments,
+                    ),
+                    const SizedBox(width: 18),
                     // 设置 (原 index 4 → 现 index 3)
                     _buildControlButton(
-                      index: 3,
+                      index: 5,
                       icon: Icons.tune,
                       onTap: onSettings,
                     ),
-                    const SizedBox(width: 24),
+                    const SizedBox(width: 18),
                     // 点赞/投币/收藏 (原 index 5 → 现 index 4)
                     _buildControlButton(
-                      index: 4,
+                      index: 6,
                       icon: Icons.thumb_up_outlined,
                       onTap: () {},
                     ),
@@ -259,6 +279,31 @@ class ControlsOverlay extends StatelessWidget {
                         fontSize: 14,
                       ),
                     ),
+                    if (subtitleLabel.isNotEmpty) ...[
+                      const SizedBox(width: 16),
+                      Text(
+                        subtitleLabel,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                    if (currentChapterLabel != null &&
+                        currentChapterLabel!.isNotEmpty) ...[
+                      const SizedBox(width: 16),
+                      Flexible(
+                        child: Text(
+                          currentChapterLabel!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],

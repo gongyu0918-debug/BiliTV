@@ -43,6 +43,10 @@ android {
     }
 }
 
+dependencies {
+    implementation("androidx.tvprovider:tvprovider:1.1.0")
+}
+
 flutter {
     source = "../.."
 }

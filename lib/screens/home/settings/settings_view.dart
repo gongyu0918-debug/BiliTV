@@ -6,6 +6,7 @@ import 'tabs/interface_settings.dart';
 import 'tabs/plugins_settings.dart';
 import 'tabs/storage_settings.dart';
 import 'tabs/about_settings.dart';
+import 'tabs/diagnostics_settings.dart';
 import '../../../widgets/time_display.dart';
 import '../../../widgets/vip_avatar_badge.dart';
 
@@ -14,6 +15,7 @@ enum SettingsCategory {
   playback('播放设置'),
   interface_('界面设置'),
   plugins('插件中心'),
+  diagnostics('诊断工具'),
   storage('其他设置'),
   about('关于软件');
 
@@ -360,6 +362,11 @@ class SettingsViewState extends State<SettingsView> {
         );
       case SettingsCategory.storage:
         return StorageSettings(
+          onMoveUp: moveToCurrentTab,
+          sidebarFocusNode: widget.sidebarFocusNode,
+        );
+      case SettingsCategory.diagnostics:
+        return DiagnosticsSettings(
           onMoveUp: moveToCurrentTab,
           sidebarFocusNode: widget.sidebarFocusNode,
         );

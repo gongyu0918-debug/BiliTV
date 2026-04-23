@@ -29,7 +29,10 @@ class _UpPanelState extends State<UpPanel> {
   List<Video> _videos = [];
   bool _isFollowing = false;
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
   String _order = 'pubdate'; // 'pubdate' = time, 'click' = popularity
+  int _currentPage = 1;
   // Focus index: 0+ = video list, -1 = sort button, -2 = follow button
   int _focusedIndex = 0;
   final ScrollController _scrollController = ScrollController();
@@ -52,18 +55,25 @@ class _UpPanelState extends State<UpPanel> {
   }
 
   Future<void> _loadData() async {
+    _currentPage = 1;
     setState(() => _isLoading = true);
 
     final results = await Future.wait([
-      BilibiliApi.getSpaceVideos(mid: widget.upMid, order: _order),
+      BilibiliApi.getSpaceVideos(
+        mid: widget.upMid,
+        page: _currentPage,
+        order: _order,
+      ),
       BilibiliApi.checkFollowStatus(widget.upMid),
     ]);
 
+    final videos = results[0] as List<Video>;
     if (mounted) {
       setState(() {
-        _videos = results[0] as List<Video>;
+        _videos = videos;
         _isFollowing = results[1] as bool;
         _isLoading = false;
+        _hasMore = videos.length >= 30;
         // Default focus on first video
         _focusedIndex = _videos.isNotEmpty ? 0 : -1;
       });
@@ -75,19 +85,43 @@ class _UpPanelState extends State<UpPanel> {
     setState(() {
       _order = newOrder;
       _isLoading = true;
+      _hasMore = true;
     });
 
     final videos = await BilibiliApi.getSpaceVideos(
       mid: widget.upMid,
+      page: 1,
       order: newOrder,
     );
     if (mounted) {
       setState(() {
         _videos = videos;
         _isLoading = false;
+        _currentPage = 1;
+        _hasMore = videos.length >= 30;
         _focusedIndex = _videos.isNotEmpty ? 0 : -1;
       });
     }
+  }
+
+  Future<void> _loadMore() async {
+    if (_isLoadingMore || !_hasMore) return;
+
+    setState(() => _isLoadingMore = true);
+    final nextPage = _currentPage + 1;
+    final videos = await BilibiliApi.getSpaceVideos(
+      mid: widget.upMid,
+      page: nextPage,
+      order: _order,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _currentPage = nextPage;
+      _videos.addAll(videos);
+      _hasMore = videos.length >= 30;
+      _isLoadingMore = false;
+    });
   }
 
   Future<void> _toggleFollow() async {
@@ -129,6 +163,9 @@ class _UpPanelState extends State<UpPanel> {
       if (_focusedIndex < _videos.length - 1) {
         setState(() => _focusedIndex++);
         if (_focusedIndex >= 0) _scrollToFocused();
+        if (_focusedIndex >= _videos.length - 3 && _hasMore && !_isLoadingMore) {
+          _loadMore();
+        }
       }
       return KeyEventResult.handled;
     }
@@ -308,11 +345,27 @@ class _UpPanelState extends State<UpPanel> {
                       )
                     : ListView.builder(
                         controller: _scrollController,
-                        itemCount: _videos.length,
-                        itemBuilder: (context, index) => _buildVideoItem(
-                          _videos[index],
-                          index == _focusedIndex,
-                        ),
+                        itemCount: _videos.length + (_isLoadingMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index >= _videos.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 20),
+                              child: Center(
+                                child: SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                          return _buildVideoItem(
+                            _videos[index],
+                            index == _focusedIndex,
+                          );
+                        },
                       ),
               ),
             ],

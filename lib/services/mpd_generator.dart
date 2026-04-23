@@ -1,4 +1,4 @@
-// Imports removed
+import 'api/base_api.dart';
 
 class MpdGenerator {
   /// 生成 DASH MPD 文件
@@ -63,8 +63,11 @@ class MpdGenerator {
     final width = stream['width'];
     final height = stream['height'];
     final frameRate = stream['frameRate'];
-    // 优先使用 baseUrl，备用使用 backupUrl
-    final baseUrl = stream['baseUrl'] ?? stream['base_url'];
+    final mediaUrls = BaseApi.normalizeMediaUrls([
+      (stream['baseUrl'] ?? stream['base_url'] ?? '').toString(),
+      ...((stream['backupUrl'] ?? stream['backup_url']) as List? ?? const []),
+    ]);
+    final baseUrl = mediaUrls.isNotEmpty ? mediaUrls.first : '';
 
     buffer.write(
       '      <Representation id="$id" codecs="$codecs" bandwidth="$bandwidth"',
@@ -88,18 +91,14 @@ class MpdGenerator {
     buffer.writeln('        <BaseURL>$escapedUrl</BaseURL>');
 
     // 备用 URL (CDN 容灾)
-    if (stream['backupUrl'] != null && stream['backupUrl'] is List) {
-      for (final backup in stream['backupUrl']) {
-        if (backup != null && backup is String && backup.isNotEmpty) {
-          final escapedBackup = backup
-              .replaceAll('&', '&amp;')
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
-              .replaceAll('"', '&quot;')
-              .replaceAll("'", '&apos;');
-          buffer.writeln('        <BaseURL>$escapedBackup</BaseURL>');
-        }
-      }
+    for (final backup in mediaUrls.skip(1)) {
+      final escapedBackup = backup
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&apos;');
+      buffer.writeln('        <BaseURL>$escapedBackup</BaseURL>');
     }
 
     // 初始化范围 (分片 MP4 必须)

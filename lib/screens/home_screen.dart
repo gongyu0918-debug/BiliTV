@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
@@ -7,10 +8,16 @@ import 'home/history_tab.dart';
 import 'home/search_tab.dart';
 import 'home/login_tab.dart';
 import 'home/dynamic_tab.dart';
+import 'home/watch_later_tab.dart';
+import 'home/favorites_tab.dart';
 import 'home/live_tab.dart';
 import '../widgets/tv_focusable_item.dart';
 import '../services/auth_service.dart';
+import '../services/bilibili_api.dart';
+import '../services/launch_intent_service.dart';
 import '../services/settings_service.dart';
+import 'player/player_screen.dart';
+import 'live/live_player_screen.dart';
 
 /// 主页框架 - 完全按照 animeone_tv_app 的方式
 class HomeScreen extends StatefulWidget {
@@ -26,13 +33,16 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedTabIndex = 1; // 默认选中首页
   DateTime? _lastBackPressed;
   DateTime? _backFromSearchHandled; // 防止搜索键盘返回键重复处理
+  StreamSubscription<LaunchAction>? _launchActionSubscription;
 
-  // Tab 顺序: 搜索、首页、动态、历史、直播、登录
+  // Tab 顺序: 搜索、首页、动态、历史、稍后再看、收藏夹、直播、登录
   final List<String> _tabIcons = [
     'assets/icons/search.svg',
     'assets/icons/home.svg',
     'assets/icons/dynamic.svg',
     'assets/icons/history.svg',
+    'assets/icons/watch_later.svg',
+    'assets/icons/favorite.svg',
     'assets/icons/live.svg', // 新增直播图标
     'assets/icons/user.svg',
   ];
@@ -48,6 +58,10 @@ class _HomeScreenState extends State<HomeScreen> {
       GlobalKey<DynamicTabState>();
   final GlobalKey<HistoryTabState> _historyTabKey =
       GlobalKey<HistoryTabState>();
+  final GlobalKey<WatchLaterTabState> _watchLaterTabKey =
+      GlobalKey<WatchLaterTabState>();
+  final GlobalKey<FavoritesTabState> _favoritesTabKey =
+      GlobalKey<FavoritesTabState>();
   final GlobalKey<LoginTabState> _loginTabKey = GlobalKey<LoginTabState>();
   // 直播 Tab
   final GlobalKey<LiveTabState> _liveTabKey = GlobalKey<LiveTabState>();
@@ -55,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    AuthService.addListener(_handleAuthStateChanged);
     _sideBarFocusNodes = List.generate(
       _tabIcons.length,
       (index) => FocusNode(),
@@ -67,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> {
       FocusManager.instance.highlightStrategy =
           FocusHighlightStrategy.alwaysTraditional;
     });
+
+    _initLaunchActions();
   }
 
   // 激活焦点系统
@@ -84,10 +101,59 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    AuthService.removeListener(_handleAuthStateChanged);
+    _launchActionSubscription?.cancel();
     for (var node in _sideBarFocusNodes) {
       node.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _initLaunchActions() async {
+    await LaunchIntentService.init();
+    _launchActionSubscription = LaunchIntentService.stream.listen(
+      _handleLaunchAction,
+    );
+    final pending = await LaunchIntentService.consumePendingAction();
+    if (pending != null && mounted) {
+      _handleLaunchAction(pending);
+    }
+  }
+
+  void _handleAuthStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _handleLaunchAction(LaunchAction action) async {
+    if (!mounted) return;
+
+    switch (action.type) {
+      case LaunchActionType.openSearch:
+        setState(() => _selectedTabIndex = 0);
+        _sideBarFocusNodes[0].requestFocus();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _searchTabKey.currentState?.openSearch(action.value);
+        });
+        break;
+      case LaunchActionType.openVideo:
+        final video = await BilibiliApi.getVideoByBvid(action.value);
+        if (!mounted || video == null) return;
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => PlayerScreen(video: video)));
+        break;
+      case LaunchActionType.openLive:
+        final roomId = int.tryParse(action.value);
+        if (!mounted || roomId == null) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => LivePlayerScreen(roomId: roomId, title: '直播间'),
+          ),
+        );
+        break;
+    }
   }
 
   void _handleSideBarTap(int index) {
@@ -100,6 +166,10 @@ class _HomeScreenState extends State<HomeScreen> {
       } else if (index == 3) {
         _historyTabKey.currentState?.refresh();
       } else if (index == 4) {
+        _watchLaterTabKey.currentState?.refresh();
+      } else if (index == 5) {
+        _favoritesTabKey.currentState?.refresh();
+      } else if (index == 6) {
         _liveTabKey.currentState?.refresh();
       }
       return;
@@ -114,6 +184,10 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (index == 3) {
       _historyTabKey.currentState?.refresh();
     } else if (index == 4) {
+      _watchLaterTabKey.currentState?.refresh();
+    } else if (index == 5) {
+      _favoritesTabKey.currentState?.refresh();
+    } else if (index == 6) {
       _liveTabKey.currentState?.refresh();
     }
   }
@@ -150,7 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (_selectedTabIndex != 1) {
-          // 其他标签（历史、直播、登录）按返回键都回到主页
+          // 其他标签按返回键都回到主页
           setState(() => _selectedTabIndex = 1);
           _sideBarFocusNodes[1].requestFocus();
           return;
@@ -189,7 +263,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: List.generate(_tabIcons.length, (index) {
-                    final isUserTab = index == 5; // User tab is now at index 5
+                    final isUserTab = index == 7;
                     final avatarUrl = isUserTab && AuthService.isLoggedIn
                         ? AuthService.face
                         : null;
@@ -205,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                       onTap: () => _handleSideBarTap(index), // 按确定键才刷新
                       // 用户标签按右键导航到设置分类标签
-                      onMoveRight: index == 4
+                      onMoveRight: index == 6
                           ? () {
                               _liveTabKey.currentState?.focusFirstItem();
                             }
@@ -260,16 +334,28 @@ class _HomeScreenState extends State<HomeScreen> {
           sidebarFocusNode: _sideBarFocusNodes[3],
           isVisible: _selectedTabIndex == 3,
         ),
-        // 4: 直播
-        LiveTab(
-          key: _liveTabKey,
+        // 4: 稍后再看
+        WatchLaterTab(
+          key: _watchLaterTabKey,
           sidebarFocusNode: _sideBarFocusNodes[4],
           isVisible: _selectedTabIndex == 4,
         ),
-        // 5: 登录/用户
+        // 5: 收藏夹
+        FavoritesTab(
+          key: _favoritesTabKey,
+          sidebarFocusNode: _sideBarFocusNodes[5],
+          isVisible: _selectedTabIndex == 5,
+        ),
+        // 6: 直播
+        LiveTab(
+          key: _liveTabKey,
+          sidebarFocusNode: _sideBarFocusNodes[6],
+          isVisible: _selectedTabIndex == 6,
+        ),
+        // 7: 登录/用户
         LoginTab(
           key: _loginTabKey,
-          sidebarFocusNode: _sideBarFocusNodes[5],
+          sidebarFocusNode: _sideBarFocusNodes[7],
           onLoginSuccess: _refreshCurrentTab,
         ),
       ],

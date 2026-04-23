@@ -87,4 +87,5 @@ flutter:
     - assets/icons/like.svg
     - assets/icons/coin.svg
     - assets/icons/favorite.svg
+    - assets/icons/watch_later.svg
     - assets/icons/live.svg

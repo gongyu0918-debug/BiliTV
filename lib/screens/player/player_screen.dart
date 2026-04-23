@@ -14,8 +14,11 @@ import 'widgets/pause_indicator.dart';
 import 'widgets/action_buttons.dart';
 import 'widgets/up_panel.dart';
 import 'widgets/related_panel.dart';
+import 'widgets/chapter_panel.dart';
+import 'widgets/comments_panel.dart';
 import 'widgets/mini_progress_bar.dart';
 import 'widgets/seek_preview_thumbnail.dart';
+import 'widgets/subtitle_layer.dart';
 import '../../widgets/time_display.dart';
 import 'mixins/player_state_mixin.dart';
 import 'mixins/player_action_mixin.dart';
@@ -104,6 +107,16 @@ class _PlayerScreenState extends State<PlayerScreen>
                     hideTop: hideTopDanmaku,
                     hideBottom: hideBottomDanmaku,
                   ),
+                ),
+
+              if (!isLoading &&
+                  videoController != null &&
+                  subtitleEnabled &&
+                  currentSubtitleText.trim().isNotEmpty)
+                SubtitleLayer(
+                  text: currentSubtitleText,
+                  fontSize: subtitleFontSize,
+                  controlsVisible: showControls,
                 ),
 
               // 暂停指示器
@@ -202,9 +215,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                         hideTimer?.cancel();
                       });
                     },
+                    onChapters: () {
+                      openChapterPanel();
+                    },
+                    onComments: () {
+                      setState(() {
+                        showCommentPanel = true;
+                        hideTimer?.cancel();
+                      });
+                      if (comments.isEmpty && !commentsLoading) {
+                        loadComments(reset: true);
+                      }
+                    },
                     isDanmakuEnabled: danmakuEnabled,
                     onToggleDanmaku: toggleDanmaku,
                     currentQuality: currentQualityDesc,
+                    subtitleLabel: subtitleEnabled
+                        ? (selectedSubtitleTrack?.language ?? '字幕关')
+                        : '字幕关',
+                    currentChapterLabel: currentChapter?.title,
                     onQualityClick: showQualityPicker,
                     isProgressBarFocused: isProgressBarFocused,
                     previewPosition: previewPosition,
@@ -273,6 +302,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                   qualityDesc: currentQualityDesc,
                   playbackSpeed: playbackSpeed,
                   availableSpeeds: availableSpeeds,
+                  subtitleEnabled: subtitleEnabled,
+                  subtitleLabel: subtitleTracks.isEmpty
+                      ? '无字幕'
+                      : (selectedSubtitleTrack?.language ?? '选择字幕'),
+                  subtitleFontSize: subtitleFontSize,
                   danmakuEnabled: danmakuEnabled,
                   danmakuOpacity: danmakuOpacity,
                   danmakuFontSize: danmakuFontSize,
@@ -280,6 +314,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                   danmakuSpeed: danmakuSpeed,
                   hideTopDanmaku: hideTopDanmaku,
                   hideBottomDanmaku: hideBottomDanmaku,
+                  smartDanmakuProtection: smartDanmakuProtection,
+                  hasDanmakuMask: danmakuMaskUrl != null,
                   onNavigate: (type, index) {
                     setState(() {
                       settingsMenuType = type;
@@ -287,6 +323,30 @@ class _PlayerScreenState extends State<PlayerScreen>
                     });
                   },
                   onQualityPicker: showQualityPicker,
+                ),
+
+              if (showChapterPanel)
+                ChapterPanel(
+                  chapters: chapters,
+                  focusedIndex: focusedChapterIndex,
+                  currentPosition:
+                      videoController?.value.position ?? Duration.zero,
+                  onSelect: (chapter) {
+                    videoController?.seekTo(chapter.from);
+                    resetDanmakuIndex(chapter.from);
+                    setState(() {
+                      showChapterPanel = false;
+                      showControls = true;
+                    });
+                    startHideTimer();
+                  },
+                  onClose: () {
+                    setState(() {
+                      showChapterPanel = false;
+                      showControls = true;
+                    });
+                    startHideTimer();
+                  },
                 ),
 
               // UP主面板
@@ -331,6 +391,22 @@ class _PlayerScreenState extends State<PlayerScreen>
                     });
                     startHideTimer();
                   },
+                ),
+
+              if (showCommentPanel)
+                CommentsPanel(
+                  comments: comments,
+                  focusedIndex: focusedCommentIndex,
+                  isLoading: commentsLoading,
+                  hasMore: commentsHasMore,
+                  onClose: () {
+                    setState(() {
+                      showCommentPanel = false;
+                      showControls = true;
+                    });
+                    startHideTimer();
+                  },
+                  onLoadMore: () => loadComments(),
                 ),
 
               // 插件跳过按钮

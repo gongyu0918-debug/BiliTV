@@ -6,6 +6,7 @@ import '../services/app_bootstrap.dart';
 import '../services/auth_service.dart';
 import '../services/bilibili_api.dart';
 import '../services/settings_service.dart';
+import '../services/tv_home_service.dart';
 import '../utils/image_url_utils.dart';
 import 'home_screen.dart';
 
@@ -74,8 +75,9 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<List<Video>> _preloadRecommendVideos() async {
+    var videos = <Video>[];
     try {
-      final videos = await BilibiliApi.getRecommendVideos(
+      videos = await BilibiliApi.getRecommendVideos(
         idx: 0,
       ).timeout(const Duration(seconds: 4));
 
@@ -118,6 +120,10 @@ class _SplashScreenState extends State<SplashScreen> {
     } catch (e) {
       debugPrint('Preload videos failed: $e');
       return [];
+    } finally {
+      if (videos.isNotEmpty) {
+        unawaited(TvHomeService.publishRecommendations(videos));
+      }
     }
   }
 

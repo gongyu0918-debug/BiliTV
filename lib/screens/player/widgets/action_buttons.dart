@@ -4,8 +4,9 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../../services/bilibili_api.dart';
 import '../../../models/video.dart';
+import 'favorite_folder_dialog.dart';
 
-/// 点赞/投币/收藏 按钮组件
+/// 点赞、投币、收藏、稍后再看按钮组件
 class ActionButtons extends StatefulWidget {
   final Video video;
   final int aid;
@@ -30,7 +31,8 @@ class _ActionButtonsState extends State<ActionButtons> {
   bool _isLiked = false;
   int _coinCount = 0;
   bool _isFavorited = false;
-  int _focusedIndex = 0; // 0=点赞, 1=投币, 2=收藏
+  bool _isInWatchLater = false;
+  int _focusedIndex = 0; // 0=点赞, 1=投币, 2=收藏, 3=稍后再看
   bool _isLoading = false;
   final FocusNode _focusNode = FocusNode();
 
@@ -70,13 +72,18 @@ class _ActionButtonsState extends State<ActionButtons> {
       BilibiliApi.checkLikeStatus(widget.aid),
       BilibiliApi.checkCoinStatus(widget.aid),
       BilibiliApi.checkFavoriteStatus(widget.aid),
+      BilibiliApi.getWatchLaterVideos(),
     ]);
 
     if (mounted) {
+      final watchLaterVideos = results[3] as List<Video>;
       setState(() {
         _isLiked = results[0] as bool;
         _coinCount = results[1] as int;
         _isFavorited = results[2] as bool;
+        _isInWatchLater = watchLaterVideos.any(
+          (video) => video.bvid == widget.video.bvid,
+        );
       });
     }
   }
@@ -124,19 +131,41 @@ class _ActionButtonsState extends State<ActionButtons> {
 
   Future<void> _onFavorite() async {
     if (_isLoading) return;
-    setState(() => _isLoading = true);
-
-    final success = await BilibiliApi.favoriteVideo(
-      aid: widget.aid,
-      favorite: !_isFavorited,
+    widget.onUserInteraction?.call();
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => FavoriteFolderDialog(
+        aid: widget.aid,
+        videoTitle: widget.video.title,
+      ),
     );
 
+    if (changed == true) {
+      await _loadStatus();
+      widget.onUserInteraction?.call();
+    }
+  }
+
+  Future<void> _onWatchLater() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
+    final success = _isInWatchLater
+        ? await BilibiliApi.removeFromWatchLater(aid: widget.aid)
+        : await BilibiliApi.addToWatchLater(
+            aid: widget.aid,
+            bvid: widget.video.bvid,
+          );
+
     if (success) {
-      setState(() => _isFavorited = !_isFavorited);
-      Fluttertoast.showToast(msg: _isFavorited ? '已收藏' : '已取消收藏');
+      setState(() => _isInWatchLater = !_isInWatchLater);
+      Fluttertoast.showToast(msg: _isInWatchLater ? '已加入稍后再看' : '已移出稍后再看');
+      widget.onUserInteraction?.call();
     } else {
       Fluttertoast.showToast(msg: '操作失败');
     }
+
     setState(() => _isLoading = false);
   }
 
@@ -144,12 +173,12 @@ class _ActionButtonsState extends State<ActionButtons> {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-      setState(() => _focusedIndex = (_focusedIndex - 1).clamp(0, 2));
+      setState(() => _focusedIndex = (_focusedIndex - 1).clamp(0, 3));
       widget.onUserInteraction?.call();
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-      setState(() => _focusedIndex = (_focusedIndex + 1).clamp(0, 2));
+      setState(() => _focusedIndex = (_focusedIndex + 1).clamp(0, 3));
       widget.onUserInteraction?.call();
       return KeyEventResult.handled;
     }
@@ -168,6 +197,9 @@ class _ActionButtonsState extends State<ActionButtons> {
           break;
         case 2:
           _onFavorite();
+          break;
+        case 3:
+          _onWatchLater();
           break;
       }
       return KeyEventResult.handled;
@@ -211,6 +243,13 @@ class _ActionButtonsState extends State<ActionButtons> {
               label: _isFavorited ? '已收藏' : '收藏',
               isActive: _isFavorited,
             ),
+            const SizedBox(width: 24),
+            _buildButton(
+              index: 3,
+              icon: _isInWatchLater ? Icons.watch_later : Icons.watch_later_outlined,
+              label: _isInWatchLater ? '已加入稍后再看' : '稍后再看',
+              isActive: _isInWatchLater,
+            ),
           ],
         ),
       ),
@@ -219,7 +258,8 @@ class _ActionButtonsState extends State<ActionButtons> {
 
   Widget _buildButton({
     required int index,
-    required String svgPath,
+    String? svgPath,
+    IconData? icon,
     required String label,
     bool isActive = false,
   }) {
@@ -239,12 +279,19 @@ class _ActionButtonsState extends State<ActionButtons> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SvgPicture.asset(
-            svgPath,
-            width: isFocused ? 32 : 28,
-            height: isFocused ? 32 : 28,
-            colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-          ),
+          if (svgPath != null)
+            SvgPicture.asset(
+              svgPath,
+              width: isFocused ? 32 : 28,
+              height: isFocused ? 32 : 28,
+              colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+            )
+          else
+            Icon(
+              icon ?? Icons.circle,
+              size: isFocused ? 32 : 28,
+              color: color,
+            ),
           const SizedBox(height: 4),
           Text(
             label,

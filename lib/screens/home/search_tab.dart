@@ -61,6 +61,11 @@ class SearchTabState extends State<SearchTab> {
     });
   }
 
+  void openSearch(String query) {
+    if (query.trim().isEmpty) return;
+    _onSearch(query.trim());
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(

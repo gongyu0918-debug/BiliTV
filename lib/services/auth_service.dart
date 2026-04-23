@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 登录认证服务
@@ -12,6 +13,7 @@ class AuthService {
   static const String _keyIsVip = 'is_vip'; // 是否是大会员
 
   static SharedPreferences? _prefs;
+  static final ValueNotifier<int> _authStateVersion = ValueNotifier<int>(0);
 
   // 内存缓存
   static String? _accessToken;
@@ -61,6 +63,18 @@ class AuthService {
   /// 是否是大会员
   static bool get isVip => _isVip;
 
+  static void addListener(VoidCallback listener) {
+    _authStateVersion.addListener(listener);
+  }
+
+  static void removeListener(VoidCallback listener) {
+    _authStateVersion.removeListener(listener);
+  }
+
+  static void _notifyAuthStateChanged() {
+    _authStateVersion.value++;
+  }
+
   /// 保存 TV 登录凭证
   static Future<void> saveLoginCredentials({
     required String accessToken,
@@ -92,6 +106,8 @@ class AuthService {
         }
       }
     }
+
+    _notifyAuthStateChanged();
   }
 
   /// 保存用户信息 (从 nav 接口获取)
@@ -109,10 +125,20 @@ class AuthService {
       _isVip = isVip;
       await _prefs?.setBool(_keyIsVip, isVip);
     }
+
+    _notifyAuthStateChanged();
   }
 
   /// 退出登录
   static Future<void> logout() async {
+    final hadAuthState =
+        _accessToken != null ||
+        _refreshToken != null ||
+        _sessdata != null ||
+        _mid != null ||
+        _face != null ||
+        _uname != null ||
+        _isVip;
     _accessToken = null;
     _refreshToken = null;
     _sessdata = null;
@@ -120,6 +146,7 @@ class AuthService {
     _mid = null;
     _face = null;
     _uname = null;
+    _isVip = false;
 
     await _prefs?.remove(_keyAccessToken);
     await _prefs?.remove(_keyRefreshToken);
@@ -128,5 +155,19 @@ class AuthService {
     await _prefs?.remove(_keyMid);
     await _prefs?.remove(_keyFace);
     await _prefs?.remove(_keyUname);
+    await _prefs?.remove(_keyIsVip);
+
+    if (hadAuthState) {
+      _notifyAuthStateChanged();
+    }
+  }
+
+  static Future<void> invalidateSession({String? reason, int? code}) async {
+    if (!isLoggedIn) return;
+
+    debugPrint(
+      '[AuthService] invalidateSession code=$code reason=${reason ?? "session-invalid"}',
+    );
+    await logout();
   }
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum SettingsMenuType { main, quality, danmaku, speed }
+enum SettingsMenuType { main, quality, subtitle, danmaku, speed }
 
 class SettingsPanel extends StatefulWidget {
   final SettingsMenuType menuType;
@@ -8,6 +8,9 @@ class SettingsPanel extends StatefulWidget {
   final String qualityDesc;
   final double playbackSpeed;
   final List<double> availableSpeeds;
+  final bool subtitleEnabled;
+  final String subtitleLabel;
+  final double subtitleFontSize;
 
   // Danmaku Settings
   final bool danmakuEnabled;
@@ -17,6 +20,8 @@ class SettingsPanel extends StatefulWidget {
   final double danmakuSpeed;
   final bool hideTopDanmaku;
   final bool hideBottomDanmaku;
+  final bool smartDanmakuProtection;
+  final bool hasDanmakuMask;
 
   // Callbacks
   final Function(SettingsMenuType, int) onNavigate;
@@ -29,6 +34,9 @@ class SettingsPanel extends StatefulWidget {
     required this.qualityDesc,
     required this.playbackSpeed,
     required this.availableSpeeds,
+    required this.subtitleEnabled,
+    required this.subtitleLabel,
+    required this.subtitleFontSize,
     required this.danmakuEnabled,
     required this.danmakuOpacity,
     required this.danmakuFontSize,
@@ -36,6 +44,8 @@ class SettingsPanel extends StatefulWidget {
     required this.danmakuSpeed,
     required this.hideTopDanmaku,
     required this.hideBottomDanmaku,
+    required this.smartDanmakuProtection,
+    required this.hasDanmakuMask,
     required this.onNavigate,
     required this.onQualityPicker,
   });
@@ -90,6 +100,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   @override
   Widget build(BuildContext context) {
     String title = '设置';
+    if (widget.menuType == SettingsMenuType.subtitle) title = '字幕设置';
     if (widget.menuType == SettingsMenuType.danmaku) title = '弹幕设置';
     if (widget.menuType == SettingsMenuType.speed) title = '倍速播放';
     if (widget.menuType == SettingsMenuType.quality) title = '画质选择';
@@ -146,6 +157,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   Widget _buildSettingsList() {
     switch (widget.menuType) {
+      case SettingsMenuType.subtitle:
+        return _buildSubtitleSettingsList();
       case SettingsMenuType.danmaku:
         return _buildDanmakuSettingsList();
       case SettingsMenuType.speed:
@@ -169,17 +182,54 @@ class _SettingsPanelState extends State<SettingsPanel> {
         ),
         _buildSettingItem(
           index: 1,
+          icon: widget.subtitleEnabled ? Icons.subtitles : Icons.subtitles_off,
+          title: '字幕设置',
+          value: widget.subtitleEnabled ? widget.subtitleLabel : '关',
+          onTap: () => widget.onNavigate(SettingsMenuType.subtitle, 0),
+        ),
+        _buildSettingItem(
+          index: 2,
           icon: Icons.subtitles,
           title: '弹幕设置',
           value: widget.danmakuEnabled ? '开' : '关',
           onTap: () => widget.onNavigate(SettingsMenuType.danmaku, 0),
         ),
         _buildSettingItem(
-          index: 2,
+          index: 3,
           icon: Icons.speed,
           title: '播放速度',
           value: '${widget.playbackSpeed}x',
           onTap: () => widget.onNavigate(SettingsMenuType.speed, 0),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSubtitleSettingsList() {
+    return ListView(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        _buildSettingItem(
+          index: 0,
+          icon: widget.subtitleEnabled ? Icons.subtitles : Icons.subtitles_off,
+          title: '字幕开关',
+          value: widget.subtitleEnabled ? '开' : '关',
+          onTap: () {},
+        ),
+        _buildSettingItem(
+          index: 1,
+          icon: Icons.translate,
+          title: '字幕轨道',
+          value: widget.subtitleLabel,
+          onTap: () {},
+        ),
+        _buildSettingItem(
+          index: 2,
+          icon: Icons.format_size,
+          title: '字幕字号',
+          value: widget.subtitleFontSize.toInt().toString(),
+          onTap: () {},
         ),
       ],
     );
@@ -237,6 +287,17 @@ class _SettingsPanelState extends State<SettingsPanel> {
           icon: Icons.vertical_align_bottom,
           title: '允许底部悬停弹幕',
           value: !widget.hideBottomDanmaku ? '开' : '关',
+          onTap: () {},
+        ),
+        _buildSettingItem(
+          index: 7,
+          icon: widget.smartDanmakuProtection
+              ? Icons.auto_fix_high
+              : Icons.auto_fix_off,
+          title: '智能防挡弹幕',
+          value: widget.smartDanmakuProtection
+              ? (widget.hasDanmakuMask ? '开 · 视频带防挡数据' : '开')
+              : '关',
           onTap: () {},
         ),
       ],
