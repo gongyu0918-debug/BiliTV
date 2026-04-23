@@ -77,171 +77,175 @@ class PlaybackApi {
         'fourk': '1',
       };
 
-      final signedParams = SignUtils.signWithWbi(
-        params,
-        BaseApi.imgKey!,
-        BaseApi.subKey!,
-      );
-      final queryString = signedParams.entries
-          .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
-          .join('&');
-      final url = 'https://api.bilibili.com/x/player/playurl?$queryString';
+      final requestCandidates = <Map<String, String>>[];
+      if (BaseApi.imgKey != null && BaseApi.subKey != null) {
+        requestCandidates.add(
+          SignUtils.signWithWbi(params, BaseApi.imgKey!, BaseApi.subKey!),
+        );
+      }
+      requestCandidates.add(Map<String, String>.from(params));
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: BaseApi.getHeaders(withCookie: true),
-      );
+      Object? lastError;
+      Map<String, dynamic>? data;
 
-      if (response.statusCode == 200) {
+      for (final requestParams in requestCandidates) {
+        final response = await http.get(
+          Uri.parse(
+            'https://api.bilibili.com/x/player/playurl',
+          ).replace(queryParameters: requestParams),
+          headers: BaseApi.getHeaders(withCookie: true),
+        );
+
+        if (response.statusCode != 200) {
+          lastError = 'HTTP ${response.statusCode}';
+          continue;
+        }
+
         final json = jsonDecode(response.body);
         if (json['code'] == 0 && json['data'] != null) {
-          final data = json['data'];
+          data = Map<String, dynamic>.from(json['data']);
+          break;
+        }
 
-          final qualities = <Map<String, dynamic>>[];
-          final acceptQuality = data['accept_quality'] as List? ?? [];
-          final acceptDesc = data['accept_description'] as List? ?? [];
-          for (int i = 0; i < acceptQuality.length; i++) {
-            qualities.add({
-              'qn': acceptQuality[i],
-              'desc': i < acceptDesc.length
-                  ? acceptDesc[i]
-                  : '${acceptQuality[i]}P',
-            });
-          }
+        lastError = 'API错误: ${json['code']} - ${json['message'] ?? '未知错误'}';
+      }
 
-          String? videoUrl;
-          String? audioUrl;
-          bool isDash = false;
+      if (data != null) {
+        final qualities = <Map<String, dynamic>>[];
+        final acceptQuality = data['accept_quality'] as List? ?? [];
+        final acceptDesc = data['accept_description'] as List? ?? [];
+        for (int i = 0; i < acceptQuality.length; i++) {
+          qualities.add({
+            'qn': acceptQuality[i],
+            'desc': i < acceptDesc.length
+                ? acceptDesc[i]
+                : '${acceptQuality[i]}P',
+          });
+        }
 
-          if (data['dash'] != null) {
-            isDash = true;
-            final dash = data['dash'];
-            final videos = dash['video'] as List? ?? [];
-            final audios = dash['audio'] as List? ?? [];
+        String? videoUrl;
+        String? audioUrl;
+        bool isDash = false;
 
-            if (videos.isNotEmpty) {
-              final videosByQuality = <int, List<dynamic>>{};
-              for (final v in videos) {
-                final id = v['id'] as int? ?? 0;
-                videosByQuality.putIfAbsent(id, () => []).add(v);
+        if (data['dash'] != null) {
+          isDash = true;
+          final dash = data['dash'];
+          final videos = dash['video'] as List? ?? [];
+          final audios = dash['audio'] as List? ?? [];
+
+          if (videos.isNotEmpty) {
+            final videosByQuality = <int, List<dynamic>>{};
+            for (final v in videos) {
+              final id = v['id'] as int? ?? 0;
+              videosByQuality.putIfAbsent(id, () => []).add(v);
+            }
+
+            final targetQn = qn;
+            var candidateVideos = videosByQuality[targetQn];
+            if (candidateVideos == null || candidateVideos.isEmpty) {
+              final sortedQualities = videosByQuality.keys.toList()
+                ..sort(
+                  (a, b) =>
+                      (b - targetQn).abs().compareTo((a - targetQn).abs()),
+                );
+              if (sortedQualities.isNotEmpty) {
+                candidateVideos = videosByQuality[sortedQualities.first];
               }
+            }
+            candidateVideos ??= videos;
 
-              final targetQn = qn;
-              var candidateVideos = videosByQuality[targetQn];
-              if (candidateVideos == null || candidateVideos.isEmpty) {
-                final sortedQualities = videosByQuality.keys.toList()
-                  ..sort(
-                    (a, b) =>
-                        (b - targetQn).abs().compareTo((a - targetQn).abs()),
-                  );
-                if (sortedQualities.isNotEmpty) {
-                  candidateVideos = videosByQuality[sortedQualities.first];
-                }
-              }
-              candidateVideos ??= videos;
+            dynamic selectedVideo;
 
-              dynamic selectedVideo;
+            // 获取硬件解码器支持列表
+            final hwDecoders = await CodecService.getHardwareDecoders();
+            final hasAv1Hw = hwDecoders.contains('av1');
+            final hasHevcHw = hwDecoders.contains('hevc');
+            final hasAvcHw = hwDecoders.contains('avc');
 
-              // 获取硬件解码器支持列表
-              final hwDecoders = await CodecService.getHardwareDecoders();
-              final hasAv1Hw = hwDecoders.contains('av1');
-              final hasHevcHw = hwDecoders.contains('hevc');
-              final hasAvcHw = hwDecoders.contains('avc');
+            // 1. 如果指定了 forceCodec（失败回退时），优先使用
+            if (forceCodec != null && forceCodec != VideoCodec.auto) {
+              selectedVideo = candidateVideos.firstWhere((v) {
+                final codecs = v['codecs'] as String? ?? '';
+                return codecs.startsWith(forceCodec.prefix);
+              }, orElse: () => null);
+            }
 
-              // 1. 如果指定了 forceCodec（失败回退时），优先使用
-              if (forceCodec != null && forceCodec != VideoCodec.auto) {
+            // 2. 首次尝试（forceCodec==null），使用用户设置
+            if (selectedVideo == null && forceCodec == null) {
+              final userCodec = SettingsService.preferredCodec;
+
+              if (userCodec != VideoCodec.auto) {
+                // 用户指定了具体编码器
                 selectedVideo = candidateVideos.firstWhere((v) {
                   final codecs = v['codecs'] as String? ?? '';
-                  return codecs.startsWith(forceCodec.prefix);
+                  return codecs.startsWith(userCodec.prefix);
                 }, orElse: () => null);
-              }
-
-              // 2. 首次尝试（forceCodec==null），使用用户设置
-              if (selectedVideo == null && forceCodec == null) {
-                final userCodec = SettingsService.preferredCodec;
-
-                if (userCodec != VideoCodec.auto) {
-                  // 用户指定了具体编码器
+              } else {
+                // 用户设置是"自动"，智能选硬解最优: AV1 > HEVC > AVC
+                if (hasAv1Hw) {
                   selectedVideo = candidateVideos.firstWhere((v) {
                     final codecs = v['codecs'] as String? ?? '';
-                    return codecs.startsWith(userCodec.prefix);
+                    return codecs.startsWith('av01');
                   }, orElse: () => null);
-                } else {
-                  // 用户设置是"自动"，智能选硬解最优: AV1 > HEVC > AVC
-                  if (hasAv1Hw) {
-                    selectedVideo = candidateVideos.firstWhere((v) {
-                      final codecs = v['codecs'] as String? ?? '';
-                      return codecs.startsWith('av01');
-                    }, orElse: () => null);
-                  }
+                }
 
-                  if (selectedVideo == null && hasHevcHw) {
-                    selectedVideo = candidateVideos.firstWhere((v) {
-                      final codecs = v['codecs'] as String? ?? '';
-                      return codecs.startsWith('hev') ||
-                          codecs.startsWith('hvc');
-                    }, orElse: () => null);
-                  }
+                if (selectedVideo == null && hasHevcHw) {
+                  selectedVideo = candidateVideos.firstWhere((v) {
+                    final codecs = v['codecs'] as String? ?? '';
+                    return codecs.startsWith('hev') || codecs.startsWith('hvc');
+                  }, orElse: () => null);
+                }
 
-                  if (selectedVideo == null && hasAvcHw) {
-                    selectedVideo = candidateVideos.firstWhere((v) {
-                      final codecs = v['codecs'] as String? ?? '';
-                      return codecs.startsWith('avc');
-                    }, orElse: () => null);
-                  }
+                if (selectedVideo == null && hasAvcHw) {
+                  selectedVideo = candidateVideos.firstWhere((v) {
+                    final codecs = v['codecs'] as String? ?? '';
+                    return codecs.startsWith('avc');
+                  }, orElse: () => null);
                 }
               }
-
-              // 3. 兜底：确保有视频（可能会用软解）
-              selectedVideo ??= candidateVideos.first;
-
-              videoUrl = selectedVideo['baseUrl'] ?? selectedVideo['base_url'];
-              final selectedCodec = selectedVideo['codecs'] as String? ?? '';
-
-              if (audios.isNotEmpty) {
-                var sortedAudios = List.from(audios);
-                sortedAudios.sort(
-                  (a, b) =>
-                      (b['bandwidth'] ?? 0).compareTo(a['bandwidth'] ?? 0),
-                );
-                audioUrl =
-                    sortedAudios.first['baseUrl'] ??
-                    sortedAudios.first['base_url'];
-              }
-
-              if (videoUrl != null) {
-                return {
-                  'url': videoUrl,
-                  'audioUrl': audioUrl,
-                  'qualities': qualities,
-                  'currentQuality': data['quality'] ?? qn,
-                  'isDash': isDash,
-                  'codec': selectedCodec,
-                  'dashData': data['dash'],
-                };
-              }
             }
-          } else if (data['durl'] != null) {
-            final durls = data['durl'] as List;
-            if (durls.isNotEmpty) {
-              videoUrl = durls[0]['url'];
+
+            // 3. 兜底：确保有视频（可能会用软解）
+            selectedVideo ??= candidateVideos.first;
+
+            videoUrl = selectedVideo['baseUrl'] ?? selectedVideo['base_url'];
+            final selectedCodec = selectedVideo['codecs'] as String? ?? '';
+
+            if (audios.isNotEmpty) {
+              var sortedAudios = List.from(audios);
+              sortedAudios.sort(
+                (a, b) => (b['bandwidth'] ?? 0).compareTo(a['bandwidth'] ?? 0),
+              );
+              audioUrl =
+                  sortedAudios.first['baseUrl'] ??
+                  sortedAudios.first['base_url'];
+            }
+
+            if (videoUrl != null) {
+              return {
+                'url': videoUrl,
+                'audioUrl': audioUrl,
+                'qualities': qualities,
+                'currentQuality': data['quality'] ?? qn,
+                'isDash': isDash,
+                'codec': selectedCodec,
+                'dashData': data['dash'],
+              };
             }
           }
-        } else {
-          // API 返回错误码
-          throw Exception(
-            'API错误: ${json['code']} - ${json['message'] ?? '未知错误'}',
-          );
+        } else if (data['durl'] != null) {
+          final durls = data['durl'] as List;
+          if (durls.isNotEmpty) {
+            videoUrl = durls[0]['url'];
+          }
         }
-      } else {
-        // HTTP 错误
-        throw Exception('HTTP ${response.statusCode}');
       }
+
+      throw Exception(lastError ?? '解析播放地址失败');
     } catch (e) {
       // 返回错误信息而不是 null
       return {'error': e.toString()};
     }
-    return null;
   }
 
   /// 获取弹幕数据 (XML 格式，支持 deflate/gzip/raw)

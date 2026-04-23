@@ -49,6 +49,67 @@ mixin PlayerActionMixin on PlayerStateMixin {
     await prefs.setBool('hide_bottom_danmaku', hideBottomDanmaku);
   }
 
+  Map<String, String> _buildVideoHeaders() {
+    return {
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+      'Referer': 'https://www.bilibili.com/',
+      'Origin': 'https://www.bilibili.com',
+      if (AuthService.sessdata != null)
+        'Cookie': 'SESSDATA=${AuthService.sessdata}',
+    };
+  }
+
+  Future<String?> _resolvePlayableUrl(Map<String, dynamic> playInfo) async {
+    if (playInfo['dashData'] != null) {
+      await LocalServer.instance.start();
+      if (!LocalServer.instance.isRunning) {
+        throw Exception('本地播放代理启动失败');
+      }
+
+      final mpdContent = await MpdGenerator.generate(playInfo['dashData']);
+      LocalServer.instance.setMpdContent(mpdContent);
+      return LocalServer.instance.mpdUrl;
+    }
+
+    return playInfo['url'] as String?;
+  }
+
+  Future<VideoPlayerController> _createInitializedController(
+    String playUrl,
+  ) async {
+    const maxRetries = 3;
+    const retryDelay = Duration(milliseconds: 1500);
+    Object? lastError;
+
+    for (final viewType in SettingsService.preferredRenderViewTypes) {
+      for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        final controller = VideoPlayerController.networkUrl(
+          Uri.parse(playUrl),
+          httpHeaders: _buildVideoHeaders(),
+          viewType: viewType,
+        );
+
+        try {
+          await controller.initialize();
+          return controller;
+        } catch (e) {
+          lastError = e;
+          await controller.dispose();
+
+          if (attempt < maxRetries) {
+            debugPrint(
+              '视频初始化失败(viewType=$viewType, 尝试 $attempt/$maxRetries): $e',
+            );
+            await Future.delayed(retryDelay);
+          }
+        }
+      }
+    }
+
+    throw Exception('播放器初始化失败: $lastError');
+  }
+
   Future<void> initializePlayer() async {
     setState(() {
       isLoading = true;
@@ -237,58 +298,18 @@ mixin PlayerActionMixin on PlayerStateMixin {
         currentCodec = playInfo['codec'] ?? '';
         currentAudioUrl = playInfo['audioUrl'];
 
-        String? playUrl;
-
-        // 如果有 DASH 数据，生成 MPD 并使用全局服务器
-        if (playInfo['dashData'] != null) {
-          final mpdContent = await MpdGenerator.generate(playInfo['dashData']);
-
-          // 使用全局 LocalServer 提供 MPD 内容 (纯内存)
-          LocalServer.instance.setMpdContent(mpdContent);
-          playUrl = LocalServer.instance.mpdUrl;
-        } else {
-          // 回退到直接 URL (mp4/flv)
-          playUrl = playInfo['url'];
+        final playUrl = await _resolvePlayableUrl(playInfo);
+        if (playUrl == null || playUrl.isEmpty) {
+          lastError = '解析播放地址失败';
+          continue codecLoop;
         }
 
-        // 创建 VideoPlayerController (带重试逻辑)
-        const maxRetries = 3;
-        const retryDelay = Duration(milliseconds: 1500);
-
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            videoController = VideoPlayerController.networkUrl(
-              Uri.parse(playUrl!),
-              httpHeaders: {
-                'User-Agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-                'Referer': 'https://www.bilibili.com/',
-                'Origin': 'https://www.bilibili.com',
-                if (AuthService.sessdata != null)
-                  'Cookie': 'SESSDATA=${AuthService.sessdata}',
-              },
-              viewType: VideoViewType.platformView,
-            );
-
-            // 初始化
-            await videoController!.initialize();
-            break; // 成功，跳出循环
-          } catch (e) {
-            // 清理失败的控制器
-            await videoController?.dispose();
-            videoController = null;
-
-            if (attempt < maxRetries) {
-              // 还有重试机会，等待后重试
-              debugPrint('视频初始化失败 (尝试 $attempt/$maxRetries): $e');
-              await Future.delayed(retryDelay);
-            } else {
-              // 重试次数用尽，尝试下一个编码器
-              debugPrint('Codec execution failed: $e');
-              lastError = '播放器初始化失败: $e';
-              continue codecLoop;
-            }
-          }
+        try {
+          videoController = await _createInitializedController(playUrl);
+        } catch (e) {
+          debugPrint('Codec execution failed: $e');
+          lastError = e.toString();
+          continue codecLoop;
         }
 
         if (!mounted) return;
@@ -1147,32 +1168,12 @@ mixin PlayerActionMixin on PlayerStateMixin {
           playInfo['qualities'] ?? [],
         );
 
-        String? playUrl;
-
-        if (playInfo['dashData'] != null) {
-          final mpdContent = await MpdGenerator.generate(playInfo['dashData']);
-
-          LocalServer.instance.setMpdContent(mpdContent);
-          playUrl = LocalServer.instance.mpdUrl;
-        } else {
-          playUrl = playInfo['url'];
+        final playUrl = await _resolvePlayableUrl(playInfo);
+        if (playUrl == null || playUrl.isEmpty) {
+          throw Exception('获取播放地址失败');
         }
 
-        // 创建新播放器
-        videoController = VideoPlayerController.networkUrl(
-          Uri.parse(playUrl!),
-          httpHeaders: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-            'Referer': 'https://www.bilibili.com/',
-            'Origin': 'https://www.bilibili.com',
-            if (AuthService.sessdata != null)
-              'Cookie': 'SESSDATA=${AuthService.sessdata}',
-          },
-          viewType: VideoViewType.platformView,
-        );
-
-        await videoController!.initialize();
+        videoController = await _createInitializedController(playUrl);
 
         _setupPlayerListeners();
         await videoController!.play();
@@ -1263,32 +1264,12 @@ mixin PlayerActionMixin on PlayerStateMixin {
       currentQuality = playInfo['currentQuality'] ?? qn;
       currentAudioUrl = playInfo['audioUrl'];
 
-      String? playUrl;
-
-      if (playInfo['dashData'] != null) {
-        final mpdContent = await MpdGenerator.generate(playInfo['dashData']);
-
-        LocalServer.instance.setMpdContent(mpdContent);
-        playUrl = LocalServer.instance.mpdUrl;
-      } else {
-        playUrl = playInfo['url'];
+      final playUrl = await _resolvePlayableUrl(playInfo);
+      if (playUrl == null || playUrl.isEmpty) {
+        throw Exception('获取播放地址失败');
       }
 
-      // 创建新播放器
-      videoController = VideoPlayerController.networkUrl(
-        Uri.parse(playUrl!),
-        httpHeaders: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-          'Referer': 'https://www.bilibili.com/',
-          'Origin': 'https://www.bilibili.com',
-          if (AuthService.sessdata != null)
-            'Cookie': 'SESSDATA=${AuthService.sessdata}',
-        },
-        viewType: VideoViewType.platformView,
-      );
-
-      await videoController!.initialize();
+      videoController = await _createInitializedController(playUrl);
       await videoController!.seekTo(position);
       resetDanmakuIndex(position);
 

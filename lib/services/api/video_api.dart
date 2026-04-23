@@ -34,37 +34,50 @@ class VideoApi {
     try {
       await BaseApi.ensureWbiKeys();
 
-      Map<String, String> params = {
+      final baseParams = {
         'fresh_idx': idx.toString(),
         'fresh_type': '4',
         'ps': '20',
       };
 
+      final requestQueue = <Uri>[];
+      Map<String, String> params = Map<String, String>.from(baseParams);
       if (BaseApi.imgKey != null && BaseApi.subKey != null) {
         params = SignUtils.signWithWbi(
           params,
           BaseApi.imgKey!,
           BaseApi.subKey!,
         );
+        requestQueue.add(
+          Uri.parse(
+            '${BaseApi.apiBase}/x/web-interface/wbi/index/top/feed/rcmd',
+          ).replace(queryParameters: params),
+        );
       }
 
-      final uri = Uri.parse(
-        '${BaseApi.apiBase}/x/web-interface/wbi/index/top/feed/rcmd',
-      ).replace(queryParameters: params);
-
-      final response = await http.get(
-        uri,
-        headers: BaseApi.getHeaders(withCookie: true),
+      requestQueue.add(
+        Uri.parse(
+          '${BaseApi.apiBase}/x/web-interface/index/top/feed/rcmd',
+        ).replace(queryParameters: baseParams),
       );
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['code'] == 0 && json['data'] != null) {
-          final items = json['data']['item'] as List? ?? [];
-          return items
-              .where((item) => item['bvid'] != null)
-              .map((item) => Video.fromRecommend(item))
-              .toList();
+      for (final uri in requestQueue) {
+        final response = await http.get(
+          uri,
+          headers: BaseApi.getHeaders(withCookie: true),
+        );
+
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body);
+          if (json['code'] == 0 && json['data'] != null) {
+            final items = json['data']['item'] as List? ?? [];
+            if (items.isNotEmpty) {
+              return items
+                  .where((item) => item['bvid'] != null)
+                  .map((item) => Video.fromRecommend(item))
+                  .toList();
+            }
+          }
         }
       }
     } catch (e) {
@@ -202,7 +215,7 @@ class VideoApi {
     try {
       await BaseApi.ensureWbiKeys();
 
-      Map<String, String> params = {
+      final baseParams = {
         'keyword': keyword,
         'search_type': 'video',
         'page': page.toString(),
@@ -210,28 +223,41 @@ class VideoApi {
         'order': order,
       };
 
+      final requestQueue = <Uri>[];
+      Map<String, String> params = Map<String, String>.from(baseParams);
       if (BaseApi.imgKey != null && BaseApi.subKey != null) {
         params = SignUtils.signWithWbi(
           params,
           BaseApi.imgKey!,
           BaseApi.subKey!,
         );
+        requestQueue.add(
+          Uri.parse(
+            '${BaseApi.apiBase}/x/web-interface/wbi/search/type',
+          ).replace(queryParameters: params),
+        );
       }
 
-      final uri = Uri.parse(
-        '${BaseApi.apiBase}/x/web-interface/wbi/search/type',
-      ).replace(queryParameters: params);
-
-      final response = await http.get(
-        uri,
-        headers: BaseApi.getHeaders(withCookie: true),
+      requestQueue.add(
+        Uri.parse(
+          '${BaseApi.apiBase}/x/web-interface/search/type',
+        ).replace(queryParameters: baseParams),
       );
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['code'] == 0 && json['data'] != null) {
-          final result = json['data']['result'] as List? ?? [];
-          return result.map((item) => Video.fromSearch(item)).toList();
+      for (final uri in requestQueue) {
+        final response = await http.get(
+          uri,
+          headers: BaseApi.getHeaders(withCookie: true),
+        );
+
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body);
+          if (json['code'] == 0 && json['data'] != null) {
+            final result = json['data']['result'] as List? ?? [];
+            if (result.isNotEmpty) {
+              return result.map((item) => Video.fromSearch(item)).toList();
+            }
+          }
         }
       }
     } catch (e) {
@@ -352,24 +378,25 @@ class VideoApi {
     try {
       await BaseApi.ensureWbiKeys();
 
-      Map<String, String> params = {
-        'mid': mid.toString(),
-        'pn': page.toString(),
-        'ps': '30',
-        'order': order,
-      };
-
-      if (BaseApi.imgKey != null && BaseApi.subKey != null) {
-        params = SignUtils.signWithWbi(
-          params,
-          BaseApi.imgKey!,
-          BaseApi.subKey!,
-        );
+      if (BaseApi.imgKey == null || BaseApi.subKey == null) {
+        return [];
       }
+
+      final signedParams = SignUtils.signWithWbi(
+        {
+          'mid': mid.toString(),
+          'pn': page.toString(),
+          'ps': '30',
+          'order': order,
+        },
+        BaseApi.imgKey!,
+        BaseApi.subKey!,
+      );
 
       final uri = Uri.parse(
         '${BaseApi.apiBase}/x/space/wbi/arc/search',
-      ).replace(queryParameters: params);
+      ).replace(queryParameters: signedParams);
+
       final response = await http.get(
         uri,
         headers: BaseApi.getHeaders(withCookie: true),
@@ -379,7 +406,9 @@ class VideoApi {
         final json = jsonDecode(response.body);
         if (json['code'] == 0 && json['data'] != null) {
           final list = json['data']['list']?['vlist'] as List? ?? [];
-          return list.map((item) => Video.fromSpaceVideo(item)).toList();
+          if (list.isNotEmpty) {
+            return list.map((item) => Video.fromSpaceVideo(item)).toList();
+          }
         }
       }
     } catch (e) {

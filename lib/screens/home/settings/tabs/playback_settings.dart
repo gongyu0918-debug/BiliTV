@@ -99,11 +99,26 @@ class _PlaybackSettingsState extends State<PlaybackSettings> {
             return _hardwareDecoders.contains(codec.name.toLowerCase());
           }).toList(),
           itemLabel: (codec) => codec.label,
-          isLast: true, // 最后一项，阻止向下导航
           sidebarFocusNode: widget.sidebarFocusNode,
           onChanged: (codec) async {
             if (codec != null) {
               await SettingsService.setPreferredCodec(codec);
+              setState(() {});
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+        SettingDropdownRow<VideoRenderMode>(
+          label: '视频渲染模式',
+          subtitle: '自动会先用纹理视图，初始化失败时再切兼容模式',
+          value: SettingsService.preferredRenderMode,
+          items: VideoRenderMode.values,
+          itemLabel: (mode) => mode.label,
+          isLast: true,
+          sidebarFocusNode: widget.sidebarFocusNode,
+          onChanged: (mode) async {
+            if (mode != null) {
+              await SettingsService.setPreferredRenderMode(mode);
               setState(() {});
             }
           },

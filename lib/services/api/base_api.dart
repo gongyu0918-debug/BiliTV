@@ -69,6 +69,44 @@ class BaseApi {
     }
   }
 
+  static bool _updateWbiKeys(dynamic data) {
+    final wbiImg = data?['wbi_img'];
+    if (wbiImg == null) return false;
+
+    final imgUrl = wbiImg['img_url'] as String? ?? '';
+    final subUrl = wbiImg['sub_url'] as String? ?? '';
+    final nextImgKey = imgUrl.split('/').last.split('.').first;
+    final nextSubKey = subUrl.split('/').last.split('.').first;
+
+    if (nextImgKey.isEmpty || nextSubKey.isEmpty) {
+      return false;
+    }
+
+    imgKey = nextImgKey;
+    subKey = nextSubKey;
+    wbiKeysTime = DateTime.now();
+    _saveWbiToStorage();
+    return true;
+  }
+
+  static Future<bool> _refreshWbiKeys({required bool withCookie}) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiBase/x/web-interface/nav'),
+        headers: getHeaders(withCookie: withCookie),
+      );
+
+      if (response.statusCode != 200) {
+        return false;
+      }
+
+      final json = jsonDecode(response.body);
+      return _updateWbiKeys(json['data']);
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// 获取 WBI keys (从 nav 接口)
   /// 缓存2小时，失败时继续使用旧值
   static Future<void> ensureWbiKeys() async {
@@ -82,32 +120,12 @@ class BaseApi {
       }
     }
 
-    try {
-      final response = await http.get(
-        Uri.parse('$apiBase/x/web-interface/nav'),
-        headers: getHeaders(withCookie: true),
-      );
-
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        if (json['code'] == 0 && json['data'] != null) {
-          final wbiImg = json['data']['wbi_img'];
-          if (wbiImg != null) {
-            final imgUrl = wbiImg['img_url'] as String? ?? '';
-            final subUrl = wbiImg['sub_url'] as String? ?? '';
-
-            imgKey = imgUrl.split('/').last.split('.').first;
-            subKey = subUrl.split('/').last.split('.').first;
-            wbiKeysTime = DateTime.now();
-
-            // 保存到本地存储
-            _saveWbiToStorage();
-          }
-        }
-      }
-    } catch (e) {
-      // 刷新失败时继续使用旧值（如果有的话）
+    final refreshedWithCookie = await _refreshWbiKeys(withCookie: true);
+    if (refreshedWithCookie) {
+      return;
     }
+
+    await _refreshWbiKeys(withCookie: false);
   }
 
   /// 修复图片 URL

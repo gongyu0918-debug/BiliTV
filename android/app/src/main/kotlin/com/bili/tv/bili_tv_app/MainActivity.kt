@@ -47,6 +47,13 @@ class MainActivity : FlutterActivity() {
                         result.error("CODEC_ERROR", e.message, null)
                     }
                 }
+                "getDeviceInfo" -> {
+                    try {
+                        result.success(getDeviceInfo())
+                    } catch (e: Exception) {
+                        result.error("DEVICE_INFO_ERROR", e.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -81,6 +88,17 @@ class MainActivity : FlutterActivity() {
         }
         
         return supportedFormats.toList()
+    }
+
+    private fun getDeviceInfo(): Map<String, Any> {
+        return mapOf(
+            "brand" to Build.BRAND,
+            "manufacturer" to Build.MANUFACTURER,
+            "model" to Build.MODEL,
+            "device" to Build.DEVICE,
+            "sdkInt" to Build.VERSION.SDK_INT,
+            "supportedAbis" to Build.SUPPORTED_ABIS.toList()
+        )
     }
 
     private fun installApk(path: String) {

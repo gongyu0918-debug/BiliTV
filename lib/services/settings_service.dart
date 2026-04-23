@@ -5,6 +5,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 /// 视频编解码器枚举
 enum VideoCodec {
@@ -18,7 +19,29 @@ enum VideoCodec {
   const VideoCodec(this.label, this.prefix);
 }
 
-/// 自定义缓存管理器 - 限制 200MB
+/// 视频渲染模式
+enum VideoRenderMode {
+  auto('自动(优先纹理)', VideoViewType.textureView),
+  texture('纹理视图', VideoViewType.textureView),
+  platform('平台视图', VideoViewType.platformView);
+
+  final String label;
+  final VideoViewType primaryViewType;
+  const VideoRenderMode(this.label, this.primaryViewType);
+
+  List<VideoViewType> get viewTypeCandidates {
+    switch (this) {
+      case VideoRenderMode.auto:
+        return const [VideoViewType.textureView, VideoViewType.platformView];
+      case VideoRenderMode.texture:
+        return const [VideoViewType.textureView];
+      case VideoRenderMode.platform:
+        return const [VideoViewType.platformView];
+    }
+  }
+}
+
+/// 自定义缓存管理器 - 控制缓存规模，减少 TV 端内存抖动
 class BiliCacheManager {
   static const key = 'biliTvCache';
   static CacheManager? _instance;
@@ -27,8 +50,8 @@ class BiliCacheManager {
     _instance ??= CacheManager(
       Config(
         key,
-        stalePeriod: const Duration(days: 7), // 7天过期
-        maxNrOfCacheObjects: 350, // 最多350个缓存对象 (约200MB)
+        stalePeriod: const Duration(days: 7),
+        maxNrOfCacheObjects: 180,
       ),
     );
     return _instance!;
@@ -180,6 +203,26 @@ class SettingsService {
   static Future<void> setPreferredCodec(VideoCodec codec) async {
     await init();
     await _prefs!.setInt(_preferredCodecKey, codec.index);
+  }
+
+  // 视频渲染模式设置
+  static const String _preferredRenderModeKey = 'preferred_render_mode';
+
+  static VideoRenderMode get preferredRenderMode {
+    final index = _prefs?.getInt(_preferredRenderModeKey) ?? 0;
+    return VideoRenderMode.values[index.clamp(
+      0,
+      VideoRenderMode.values.length - 1,
+    )];
+  }
+
+  static List<VideoViewType> get preferredRenderViewTypes {
+    return preferredRenderMode.viewTypeCandidates;
+  }
+
+  static Future<void> setPreferredRenderMode(VideoRenderMode mode) async {
+    await init();
+    await _prefs!.setInt(_preferredRenderModeKey, mode.index);
   }
 
   // 迷你进度条设置

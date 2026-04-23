@@ -52,7 +52,15 @@ class AuthApi {
         '${BaseApi.passportBase}/x/passport-tv-login/qrcode/auth_code',
       ).replace(queryParameters: params);
 
-      final response = await http.post(uri);
+      final response = await http.post(
+        uri,
+        headers: {
+          ...BaseApi.getHeaders(),
+          'Accept': 'application/json, text/plain, */*',
+          'Origin': 'https://www.bilibili.com',
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        },
+      );
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
@@ -82,7 +90,15 @@ class AuthApi {
         '${BaseApi.passportBase}/x/passport-tv-login/qrcode/poll',
       ).replace(queryParameters: params);
 
-      final response = await http.post(uri);
+      final response = await http.post(
+        uri,
+        headers: {
+          ...BaseApi.getHeaders(),
+          'Accept': 'application/json, text/plain, */*',
+          'Origin': 'https://www.bilibili.com',
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        },
+      );
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);

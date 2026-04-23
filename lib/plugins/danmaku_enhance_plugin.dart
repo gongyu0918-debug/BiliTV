@@ -180,6 +180,26 @@ class _DanmakuBlockSettings extends StatefulWidget {
 class _DanmakuBlockSettingsState extends State<_DanmakuBlockSettings> {
   final TextEditingController _partialInputController = TextEditingController();
   final TextEditingController _fullInputController = TextEditingController();
+  String? _serverAddress;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverAddress = LocalServer.instance.address;
+    _ensureLocalServer();
+  }
+
+  Future<void> _ensureLocalServer() async {
+    if (!LocalServer.instance.isRunning) {
+      await LocalServer.instance.start();
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _serverAddress = LocalServer.instance.address;
+    });
+  }
 
   @override
   void dispose() {
@@ -191,7 +211,7 @@ class _DanmakuBlockSettingsState extends State<_DanmakuBlockSettings> {
   @override
   Widget build(BuildContext context) {
     final config = widget.plugin._config;
-    final serverAddress = LocalServer.instance.address ?? 'http://TV_IP:3322';
+    final serverAddress = _serverAddress ?? 'http://TV_IP:3322';
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
