@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
 import '../config/env.dart';
+import 'device_service.dart';
 
 /// 更新信息模型
 class UpdateInfo {
@@ -84,18 +84,30 @@ class UpdateService {
   }
 
   /// 获取设备 CPU 架构
-  static String _getDeviceArch() {
-    // Android 设备架构检测
-    // arm64-v8a 对应 64 位 ARM
-    // armeabi-v7a 对应 32 位 ARM
-    final arch = Platform.version;
+  static Future<String> _getDeviceArch() async {
+    try {
+      final supportedAbis = await DeviceService.getSupportedAbis();
+      if (supportedAbis.contains('arm64-v8a')) {
+        return 'arm64-v8a';
+      }
+      if (supportedAbis.contains('armeabi-v7a')) {
+        return 'armeabi-v7a';
+      }
+      if (supportedAbis.isNotEmpty) {
+        return supportedAbis.first;
+      }
+    } catch (_) {
+      // 使用 Dart 侧兜底
+    }
+
+    final arch = Platform.version.toLowerCase();
     if (arch.contains('arm64') || arch.contains('aarch64')) {
       return 'arm64-v8a';
-    } else if (arch.contains('arm')) {
+    }
+    if (arch.contains('arm')) {
       return 'armeabi-v7a';
     }
-    // 默认返回 arm64-v7a
-    return 'arm64-v7a';
+    return 'arm64-v8a';
   }
 
   /// 检查更新
@@ -146,21 +158,8 @@ class UpdateService {
     try {
       await init();
 
-      // 请求存储权限
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        // 部分 Android 版本 (11+) 不需要 WRITE_EXTERNAL_STORAGE，而是 scoped storage
-        // 但为了兼容旧版本，还是建议请求。如果请求失败，尝试继续（以防是 scoped storage 的情况）
-        // 或者请求 REQUEST_INSTALL_PACKAGES (在安装时会触发)
-
-        // 尝试请求 manageExternalStorage (Android 11+)
-        if (await Permission.manageExternalStorage.isGranted == false) {
-          // 简单的兼容处理: 即使 denied 也尝试继续，因为可能是 Scoped Storage
-        }
-      }
-
       // 获取设备架构
-      final arch = _getDeviceArch();
+      final arch = await _getDeviceArch();
 
       // 下载 APK（带架构参数）
       final downloadUrl = Uri.parse(
@@ -188,13 +187,8 @@ class UpdateService {
         }
       }
 
-      // 保存到本地
-      final dir = await getExternalStorageDirectory();
-      if (dir == null) {
-        onError?.call('无法获取存储目录');
-        return;
-      }
-
+      // 保存到应用缓存目录，Android 11+ 无需额外存储权限
+      final dir = await getApplicationCacheDirectory();
       final apkFile = File('${dir.path}/bilitv_update.apk');
       await apkFile.writeAsBytes(bytes);
 

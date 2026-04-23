@@ -1,21 +1,30 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as status;
 import 'package:brotli/brotli.dart';
-import 'dart:math'; // For random buvid
 import 'api/live_api.dart';
-import 'auth_service.dart'; // Import AuthService
+import 'auth_service.dart';
 
 /// 直播弹幕 Socket 服务
 class LiveSocketService {
   WebSocketChannel? _channel;
+  StreamSubscription? _channelSubscription;
   Timer? _heartbeatTimer;
+  Timer? _reconnectTimer;
   final StreamController<Map<String, dynamic>> _msgController =
       StreamController.broadcast();
+  List<dynamic> _hostList = [];
+  String _token = '';
+  int? _roomId;
+  int _hostIndex = 0;
+  int _reconnectAttempt = 0;
+  bool _manualDisconnect = false;
+  int _connectEpoch = 0;
 
   Stream<Map<String, dynamic>> get messageStream => _msgController.stream;
 
@@ -27,33 +36,88 @@ class LiveSocketService {
   bool get isConnected => _isConnected;
 
   /// 连接直播间
-  Future<void> connect(int roomId) async {
-    disconnect(); // 先断开旧连接
+  Future<void> connect(int roomId, {bool isReconnect = false}) async {
+    final connectEpoch = ++_connectEpoch;
+    _manualDisconnect = false;
+    _roomId = roomId;
+    if (!isReconnect) {
+      _reconnectAttempt = 0;
+    }
+    _reconnectTimer?.cancel();
+    _closeSocket();
 
     try {
-      // 1. 获取弹幕服务器配置
       final conf = await LiveApi.getDanmakuConf(roomId);
-      if (conf == null) {
-        _msgController.add({'type': 'error', 'msg': '获取弹幕配置失败'});
+      if (!_isConnectAttemptActive(connectEpoch, roomId)) {
         return;
       }
 
-      final token = conf['token'];
-      final hostList = conf['host_list'] as List;
-      if (hostList.isEmpty) return;
+      if (conf == null) {
+        _emit({'type': 'error', 'msg': '获取弹幕配置失败'});
+        _scheduleReconnect(
+          '获取弹幕配置失败',
+          refetchConfig: true,
+          connectEpoch: connectEpoch,
+          roomId: roomId,
+        );
+        return;
+      }
 
-      // 优先使用 wss
-      final hostInfo = hostList.firstWhere(
-        (h) => h['wss_port'] != null,
-        orElse: () => hostList.first,
+      _token = conf['token'] as String? ?? '';
+      _hostList = List<dynamic>.from(conf['host_list'] as List? ?? const []);
+      if (_hostList.isEmpty) {
+        _emit({'type': 'error', 'msg': '弹幕服务器列表为空'});
+        _scheduleReconnect(
+          '弹幕服务器列表为空',
+          refetchConfig: true,
+          connectEpoch: connectEpoch,
+          roomId: roomId,
+        );
+        return;
+      }
+
+      _hostList.sort((a, b) {
+        final aScore = a['wss_port'] != null ? 0 : 1;
+        final bScore = b['wss_port'] != null ? 0 : 1;
+        return aScore.compareTo(bScore);
+      });
+
+      if (!_isConnectAttemptActive(connectEpoch, roomId)) {
+        return;
+      }
+
+      await _connectWithFailover(connectEpoch, roomId);
+    } catch (e) {
+      _log('Connect Error: $e');
+      _emit({'type': 'error', 'msg': '连接失败: $e'});
+      _scheduleReconnect(
+        '连接失败: $e',
+        refetchConfig: true,
+        connectEpoch: connectEpoch,
+        roomId: roomId,
       );
+    }
+  }
+
+  Future<void> _connectWithFailover(int connectEpoch, int roomId) async {
+    if (_hostList.isEmpty || !_isConnectAttemptActive(connectEpoch, roomId)) {
+      return;
+    }
+
+    final hostCount = _hostList.length;
+    for (int offset = 0; offset < hostCount; offset++) {
+      if (!_isConnectAttemptActive(connectEpoch, roomId)) {
+        return;
+      }
+
+      final candidateIndex = (_hostIndex + offset) % hostCount;
+      final hostInfo = _hostList[candidateIndex];
       final host = hostInfo['host'];
       final port = hostInfo['wss_port'] ?? hostInfo['port'];
       final wssUrl = 'wss://$host:$port/sub';
 
       _log('🔌 Connecting to Live WS: $wssUrl');
 
-      // 2. 建立连接
       try {
         final socket = await WebSocket.connect(
           wssUrl,
@@ -65,13 +129,18 @@ class LiveSocketService {
           },
         );
 
+        if (!_isConnectAttemptActive(connectEpoch, roomId)) {
+          await socket.close(status.goingAway);
+          return;
+        }
+
         socket.pingInterval = const Duration(seconds: 10);
         _channel = IOWebSocketChannel(socket);
+        _hostIndex = candidateIndex;
         _isConnected = true;
         _log('🚀 WS Connected & Channel Ready');
 
-        // 5. 监听消息 (先监听，再发送)
-        _channel!.stream.listen(
+        _channelSubscription = _channel!.stream.listen(
           (message) {
             try {
               _handleMessage(message);
@@ -80,40 +149,113 @@ class LiveSocketService {
             }
           },
           onError: (error) {
-            _log('WS Error: $error');
-            _isConnected = false;
-            _msgController.add({'type': 'error', 'msg': '连接中断: $error'});
-            disconnect();
+            _handleSocketFailure('连接中断: $error');
           },
           onDone: () {
-            _log(
-              'WS Closed (Code: ${socket.closeCode}, Reason: ${socket.closeReason})',
+            _handleSocketFailure(
+              '连接关闭: ${socket.closeCode ?? 0}/${socket.closeReason ?? ''}',
             );
-            _isConnected = false;
-            disconnect();
           },
+          cancelOnError: true,
         );
 
-        // 3. 发送进房认证包
-        _sendAuth(roomId, token);
-
-        // 4. 开启心跳
+        _sendAuth(roomId, _token);
         _startHeartbeat();
+        _reconnectAttempt = 0;
+        return;
       } catch (e) {
         _log('WS Handshake Error: $e');
-        _msgController.add({'type': 'error', 'msg': '握手失败: $e'});
+      }
+    }
+
+    _scheduleReconnect(
+      '握手失败',
+      refetchConfig: true,
+      connectEpoch: connectEpoch,
+      roomId: roomId,
+    );
+  }
+
+  void _handleSocketFailure(String reason) {
+    _log(reason);
+    _closeSocket();
+
+    if (_manualDisconnect) {
+      return;
+    }
+
+    if (_hostList.isNotEmpty) {
+      _hostIndex = (_hostIndex + 1) % _hostList.length;
+    }
+    _scheduleReconnect(reason);
+  }
+
+  void _scheduleReconnect(
+    String reason, {
+    bool refetchConfig = false,
+    int? connectEpoch,
+    int? roomId,
+  }) {
+    if (_manualDisconnect || _roomId == null) {
+      return;
+    }
+
+    if (connectEpoch != null && roomId != null) {
+      if (!_isConnectAttemptActive(connectEpoch, roomId)) {
         return;
       }
-    } catch (e) {
-      _log('Connect Error: $e');
-      _msgController.add({'type': 'error', 'msg': '连接失败: $e'});
+    }
+
+    if (_reconnectTimer?.isActive ?? false) {
+      return;
+    }
+
+    _reconnectAttempt++;
+    final seconds = min(15, max(2, 1 << min(_reconnectAttempt, 4)));
+    _emit({'type': 'error', 'msg': '弹幕连接波动，$seconds秒后重连', 'reason': reason});
+    _reconnectTimer = Timer(Duration(seconds: seconds), () async {
+      if (_manualDisconnect || _roomId == null) {
+        return;
+      }
+      if (connectEpoch != null && roomId != null) {
+        if (!_isConnectAttemptActive(connectEpoch, roomId)) {
+          return;
+        }
+      }
+      if (refetchConfig) {
+        await connect(_roomId!, isReconnect: true);
+      } else {
+        await _connectWithFailover(_connectEpoch, _roomId!);
+      }
+    });
+  }
+
+  void _emit(Map<String, dynamic> message) {
+    if (!_msgController.isClosed) {
+      _msgController.add(message);
     }
   }
 
   void disconnect() {
+    _manualDisconnect = true;
+    _connectEpoch++;
+    _reconnectTimer?.cancel();
+    _closeSocket();
+  }
+
+  bool _isConnectAttemptActive(int connectEpoch, int roomId) {
+    return !_manualDisconnect &&
+        _connectEpoch == connectEpoch &&
+        _roomId == roomId;
+  }
+
+  void _closeSocket() {
+    _channelSubscription?.cancel();
+    _channelSubscription = null;
     _channel?.sink.close(status.goingAway);
     _channel = null;
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _isConnected = false;
   }
 
@@ -245,7 +387,7 @@ class LiveSocketService {
         // Heartbeat Reply
         final viewers = ByteData.sublistView(body).getUint32(0);
         // debugPrint('Heartbeat Reply: $viewers');
-        _msgController.add({'type': 'popularity', 'count': viewers});
+        _emit({'type': 'popularity', 'count': viewers});
       } else if (op == 8) {
         // Auth Reply
         _log('✅ Live WS Auth Success');
@@ -279,7 +421,7 @@ class LiveSocketService {
           // ignore
         }
 
-        _msgController.add({
+        _emit({
           'type': 'danmaku',
           'content': content,
           'user': userName,

@@ -45,6 +45,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   bool _showControls = true;
   Timer? _hideTimer;
   Timer? _popularityTimer;
+  StreamSubscription<Map<String, dynamic>>? _socketSubscription;
   String _onlineCount = '0';
 
   // Settings State
@@ -151,6 +152,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     // _danmakuController is disposed by its widget usually, or doesn't need disposal
     _socketService.dispose();
+    _socketSubscription?.cancel();
     _hideTimer?.cancel();
     _popularityTimer?.cancel();
     _controller?.dispose();
@@ -333,20 +335,10 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
       // 4. 初始化播放器
       final oldController = _controller;
-
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        httpHeaders: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-          'Referer': 'https://live.bilibili.com/',
-        },
-        viewType: VideoViewType.platformView,
-      );
-
-      await _controller!.initialize();
+      final newController = await _createVideoController(url);
+      await newController.play();
       oldController?.dispose();
-      await _controller!.play();
+      _controller = newController;
 
       setState(() {
         _isLoading = false;
@@ -361,10 +353,6 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
         _connectDanmaku();
       }
 
-      // 4. Start API polling for popularity (fallback for socket)
-      _startPopularityTimer();
-
-      // 4. Start API polling for popularity (fallback for socket)
       _startPopularityTimer();
     } catch (e) {
       if (mounted) {
@@ -378,8 +366,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
   void _connectDanmaku() {
     debugPrint('Connecting Danmaku to RoomID: $_realRoomId');
+    _socketSubscription?.cancel();
     _socketService.connect(_realRoomId);
-    _socketService.messageStream.listen(
+    _socketSubscription = _socketService.messageStream.listen(
       (msg) {
         if (!mounted) return;
 
@@ -435,8 +424,58 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   void _startHideTimer() {
     // Cancel any existing timer
     _hideTimer?.cancel();
+    if (_showSettingsPanel) {
+      return;
+    }
     // Start a new timer
     _hideTimer = Timer(const Duration(seconds: 5), _hideControls);
+  }
+
+  Map<String, String> _buildVideoHeaders() {
+    return {
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+      'Referer': 'https://live.bilibili.com/',
+    };
+  }
+
+  bool _isBackKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.goBack ||
+        key == LogicalKeyboardKey.browserBack ||
+        key == LogicalKeyboardKey.escape;
+  }
+
+  Future<VideoPlayerController> _createVideoController(String url) async {
+    const maxRetries = 2;
+    const retryDelay = Duration(milliseconds: 1200);
+    Object? lastError;
+
+    for (final viewType in SettingsService.preferredRenderViewTypes) {
+      for (int attempt = 1; attempt <= maxRetries; attempt++) {
+        final controller = VideoPlayerController.networkUrl(
+          Uri.parse(url),
+          httpHeaders: _buildVideoHeaders(),
+          viewType: viewType,
+        );
+
+        try {
+          await controller.initialize();
+          return controller;
+        } catch (e) {
+          lastError = e;
+          await controller.dispose();
+
+          if (attempt < maxRetries) {
+            debugPrint(
+              'LivePlayer init failed(viewType=$viewType, 尝试 $attempt/$maxRetries): $e',
+            );
+            await Future.delayed(retryDelay);
+          }
+        }
+      }
+    }
+
+    throw Exception('直播播放器初始化失败: $lastError');
   }
 
   void _startPopularityTimer() {
@@ -473,7 +512,8 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     if (event is KeyDownEvent) {
       _startHideTimer(); // Reset timer on input
 
-      if (event.logicalKey == LogicalKeyboardKey.goBack) {
+      if (event.logicalKey == LogicalKeyboardKey.goBack ||
+          event.logicalKey == LogicalKeyboardKey.browserBack) {
         return KeyEventResult.ignored;
       }
 
@@ -632,8 +672,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
         _adjustDanmakuSetting(_focusedSettingIndex, 1);
       }
       // For other menus, Right might imply select? Or do nothing.
-    } else if (event.logicalKey == LogicalKeyboardKey.goBack ||
-        event.logicalKey == LogicalKeyboardKey.escape) {
+    } else if (_isBackKey(event.logicalKey)) {
       setState(() {
         // Always close panel on Back/Escape
         _showSettingsPanel = false;

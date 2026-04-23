@@ -73,7 +73,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _activateFocusSystem() {
     if (!mounted) return;
 
-    // 强制设置高亮策略为传统模式 (TV 模式)
     FocusManager.instance.highlightStrategy =
         FocusHighlightStrategy.alwaysTraditional;
 
@@ -81,36 +80,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!currentFocusNode.hasFocus) {
       currentFocusNode.requestFocus();
     }
-
-    // 首页加载完成后，延迟后台预加载动态和历史记录
-    _preloadOtherTabs();
-  }
-
-  // 后台预加载动态和历史记录
-  void _preloadOtherTabs() {
-    // 延迟 500ms 后开始预加载，避免影响首页渲染
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (!mounted) return;
-      // 预加载动态页面（如果用户已登录）
-      if (AuthService.isLoggedIn) {
-        _dynamicTabKey.currentState?.refresh();
-      }
-    });
-
-    // 再延迟 1 秒后预加载历史记录
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (!mounted) return;
-      // 预加载历史记录（如果用户已登录）
-      if (AuthService.isLoggedIn) {
-        _historyTabKey.currentState?.refresh();
-      }
-    });
-
-    // 预加载直播
-    Future.delayed(const Duration(milliseconds: 2500), () {
-      if (!mounted) return;
-      _liveTabKey.currentState?.refresh();
-    });
   }
 
   @override

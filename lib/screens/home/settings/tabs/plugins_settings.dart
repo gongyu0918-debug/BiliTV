@@ -18,6 +18,26 @@ class PluginsSettingsTab extends StatefulWidget {
 
 class _PluginsSettingsTabState extends State<PluginsSettingsTab> {
   final _pluginManager = PluginManager();
+  String? _serverAddress;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverAddress = LocalServer.instance.address;
+    _ensureLocalServer();
+  }
+
+  Future<void> _ensureLocalServer() async {
+    if (!LocalServer.instance.isRunning) {
+      await LocalServer.instance.start();
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _serverAddress = LocalServer.instance.address;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +47,7 @@ class _PluginsSettingsTabState extends State<PluginsSettingsTab> {
       );
     }
 
-    final serverAddress = LocalServer.instance.address ?? 'http://TV_IP:3322';
+    final serverAddress = _serverAddress ?? 'http://TV_IP:3322';
 
     return ListView(
       padding: const EdgeInsets.all(20),
